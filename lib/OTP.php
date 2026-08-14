@@ -8,11 +8,6 @@ namespace ClientLoginVerify;
 
 class OTP
 {
-    /**
-     * Generate a new OTP for a client, invalidating any previous pending code.
-     *
-     * @return string plaintext code (for emailing)
-     */
     public static function generate($clientId, $length = 6, $expiryMinutes = 5, $maxAttempts = 5, $userId = null)
     {
         \Capsule::table('mod_clientloginverify_codes')
@@ -22,29 +17,23 @@ class OTP
 
         $code = self::random($length);
         $hash = password_hash($code, PASSWORD_DEFAULT);
-        $now = time();
 
         \Capsule::table('mod_clientloginverify_codes')->insert([
             'user_id'      => $userId ? (int) $userId : null,
             'client_id'    => $clientId,
             'otp_hash'     => $hash,
-            'expires_at'   => date('Y-m-d H:i:s', $now + ($expiryMinutes * 60)),
+            'expires_at'   => Time::dbExpires($expiryMinutes),
             'attempts'     => 0,
             'max_attempts' => $maxAttempts,
             'resends'      => 0,
             'ip_address'   => self::ip(),
             'user_agent'   => isset($_SERVER['HTTP_USER_AGENT']) ? substr($_SERVER['HTTP_USER_AGENT'], 0, 500) : null,
-            'created_at'   => date('Y-m-d H:i:s', $now),
+            'created_at'   => Time::dbNow(),
         ]);
 
         return $code;
     }
 
-    /**
-     * Verify a submitted code for a client.
-     *
-     * @return array{success:bool,message:string}
-     */
     public static function verify($clientId, $input)
     {
         $row = \Capsule::table('mod_clientloginverify_codes')
@@ -56,55 +45,57 @@ class OTP
         if (!$row) {
             return ['success' => false, 'message' => 'No active verification code found. Please request a new code.'];
         }
-        if (strtotime($row->expires_at) < time()) {
+        if (Time::isExpired($row->expires_at)) {
             return ['success' => false, 'message' => 'Your verification code has expired. Please request a new one.'];
         }
         if ((int) $row->attempts >= (int) $row->max_attempts) {
             return ['success' => false, 'message' => 'Too many incorrect attempts. Please request a new code.'];
         }
 
-        \Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)->increment('attempts');
+        $updated = \Capsule::table('mod_clientloginverify_codes')
+            ->where('id', $row->id)
+            ->where('attempts', '<', $row->max_attempts)
+            ->increment('attempts');
+
+        if (!$updated) {
+            return ['success' => false, 'message' => 'Too many incorrect attempts. Please request a new code.'];
+        }
+
+        $row = \Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)->first();
 
         if (password_verify($input, $row->otp_hash)) {
             \Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)
-                ->update(['verified_at' => date('Y-m-d H:i:s')]);
+                ->update(['verified_at' => Time::dbNow()]);
             return ['success' => true];
         }
 
         return ['success' => false, 'message' => 'Invalid verification code. Please try again.'];
     }
 
-    /**
-     * Does the client currently have a valid (non-expired, unverified) pending code?
-     */
     public static function hasPending($clientId)
     {
         return \Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
-            ->where('expires_at', '>', date('Y-m-d H:i:s'))
+            ->where('expires_at', '>', Time::dbNow())
             ->exists();
     }
 
-    /**
-     * Remove old verified codes and old log entries to keep the tables bounded.
-     * Intended to be called infrequently (e.g. throttled from the login hook).
-     */
     public static function cleanupOld($codesDays = 30, $logsDays = 90)
     {
+        $cutoffCodes = Time::dbFromTimestamp(Time::timestamp() - ($codesDays * 86400));
+        $cutoffLogs  = Time::dbFromTimestamp(Time::timestamp() - ($logsDays * 86400));
+
         \Capsule::table('mod_clientloginverify_codes')
             ->whereNotNull('verified_at')
-            ->where('created_at', '<', date('Y-m-d H:i:s', time() - ($codesDays * 86400)))
+            ->where('created_at', '<', $cutoffCodes)
             ->delete();
 
         \Capsule::table('mod_clientloginverify_logs')
-            ->where('created_at', '<', date('Y-m-d H:i:s', time() - ($logsDays * 86400)))
+            ->where('created_at', '<', $cutoffLogs)
             ->delete();
     }
 
-    /**
-     * Generate a random numeric code of the given length.
-     */
     public static function random($length = 6)
     {
         $length = (int) $length;

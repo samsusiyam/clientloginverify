@@ -8,11 +8,6 @@ namespace ClientLoginVerify;
 
 class Security
 {
-    /**
-     * Numeric ranges for known settings. Values are clamped so an admin cannot
-     * enter data that breaks verification (e.g. maxAttempts=0 locks every code,
-     * otpLength<4 makes the form reject the generated code).
-     */
     private static $clampRanges = [
         'otpLength'      => [4, 8],
         'otpExpiry'      => [1, 1440],
@@ -50,9 +45,6 @@ class Security
         return $out;
     }
 
-    /**
-     * Whether the given client must complete email 2FA.
-     */
     public static function requires2FA($clientId)
     {
         $force = self::setting('forceVerification', 'on');
@@ -60,7 +52,7 @@ class Security
 
         if ($force === 'on') {
             if ($pc === 'off') {
-                return false; // admin disabled for this client
+                return false;
             }
             if (self::inExcludedGroup($clientId)) {
                 return false;
@@ -68,15 +60,9 @@ class Security
             return true;
         }
 
-        // force off -> only clients explicitly enabled
         return ($pc === 'on');
     }
 
-    /**
-     * Can the client request a resend right now?
-     *
-     * @return array{ok:bool,message:string}
-     */
     public static function canResend($clientId)
     {
         $row = \Capsule::table('mod_clientloginverify_codes')
@@ -96,7 +82,7 @@ class Security
             return ['ok' => false, 'message' => 'Maximum resend limit reached. Please wait for the code to expire.'];
         }
 
-        $elapsed = time() - strtotime($row->created_at);
+        $elapsed = Time::timestamp() - strtotime($row->created_at);
         if ($elapsed < $cooldown) {
             $wait = $cooldown - $elapsed;
             return ['ok' => false, 'message' => 'Please wait ' . $wait . ' seconds before requesting a new code.'];
@@ -105,37 +91,61 @@ class Security
         return ['ok' => true];
     }
 
-    /**
-     * Generate + email a fresh code on the existing pending row (keeps resend counter).
-     *
-     * @return array{ok:bool,message:string}
-     */
     public static function resend($clientId)
     {
-        $check = self::canResend($clientId);
-        if (!$check['ok']) {
-            return $check;
-        }
+        $cooldown = (int) self::setting('resendCooldown', 60);
+        $maxResends = (int) self::setting('maxResends', 3);
+        $length = (int) self::setting('otpLength', 6);
+        $expiry = (int) self::setting('otpExpiry', 5);
 
         $row = \Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
+            ->where('resends', '<', $maxResends)
+            ->whereRaw('TIMESTAMPDIFF(SECOND, created_at, NOW()) >= ?', [$cooldown])
             ->orderBy('created_at', 'desc')
             ->first();
 
-        $length = (int) self::setting('otpLength', 6);
-        $expiry = (int) self::setting('otpExpiry', 5);
+        if (!$row) {
+            $checkRow = \Capsule::table('mod_clientloginverify_codes')
+                ->where('client_id', $clientId)
+                ->whereNull('verified_at')
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            if (!$checkRow) {
+                return ['ok' => false, 'message' => 'No active code to resend.'];
+            }
+            if ((int) $checkRow->resends >= $maxResends) {
+                return ['ok' => false, 'message' => 'Maximum resend limit reached. Please wait for the code to expire.'];
+            }
+            $elapsed = Time::timestamp() - strtotime($checkRow->created_at);
+            if ($elapsed < $cooldown) {
+                return ['ok' => false, 'message' => 'Please wait ' . ($cooldown - $elapsed) . ' seconds before requesting a new code.'];
+            }
+            return ['ok' => false, 'message' => 'Unable to resend code at this time.'];
+        }
 
         $code = OTP::random($length);
         \Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)->update([
             'otp_hash'   => password_hash($code, PASSWORD_DEFAULT),
-            'expires_at' => date('Y-m-d H:i:s', time() + ($expiry * 60)),
-            'created_at' => date('Y-m-d H:i:s'),
+            'expires_at' => Time::dbExpires($expiry),
+            'created_at' => Time::dbNow(),
             'attempts'   => 0,
             'resends'    => (int) $row->resends + 1,
         ]);
 
-        Mailer::sendCode($clientId, $code, $expiry);
+        $emailSent = false;
+        try {
+            $emailSent = Mailer::sendCode($clientId, $code, $expiry);
+        } catch (\Exception $e) {
+            $emailSent = false;
+        }
+
+        if (!$emailSent) {
+            return ['ok' => false, 'message' => 'Failed to send verification email. Please try again later.'];
+        }
+
         return ['ok' => true];
     }
 

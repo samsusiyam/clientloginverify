@@ -40,7 +40,10 @@
             </form>
 
             <div class="clv-resend">
-                <a href="index.php?m=clientloginverify&clvverify=1&action=resend&token={$token}">{$lang.resend}</a>
+                <form method="post" action="index.php?m=clientloginverify&clvverify=1&action=resend" class="clv-resend-form">
+                    <input type="hidden" name="token" value="{$token}">
+                    <button type="submit" class="clv-resend-btn">{$lang.resend}</button>
+                </form>
             </div>
         {/if}
     </div>
@@ -68,7 +71,7 @@
 .clv-shield { font-size: 40px; line-height: 1; }
 .clv-title { margin: 6px 0 8px; font-size: 22px; color: #1a2b4a; }
 .clv-instruction { margin: 0 0 20px; color: #5a6b85; font-size: 14px; line-height: 1.5; }
-.clv-alert { padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
+.clv-alert { padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; text-align: left; }
 .clv-alert-error { background: #fdecea; color: #b71c1c; border: 1px solid #f5c6cb; }
 .clv-alert-info { background: #e8f4fd; color: #0b62a8; border: 1px solid #b8e0ff; }
 .clv-field { text-align: left; margin-bottom: 16px; }
@@ -99,7 +102,16 @@
     transition: background .15s;
 }
 .clv-btn:hover { background: #2257d6; }
-.clv-resend { margin-top: 18px; font-size: 13px; }
-.clv-resend a { color: #2f6df6; text-decoration: none; }
-.clv-resend a:hover { text-decoration: underline; }
+.clv-resend { margin-top: 18px; }
+.clv-resend-form { margin: 0; }
+.clv-resend-btn {
+    background: none;
+    border: none;
+    color: #2f6df6;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: none;
+}
+.clv-resend-btn:hover { text-decoration: underline; }
 </style>

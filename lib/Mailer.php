@@ -8,11 +8,6 @@ namespace ClientLoginVerify;
 
 class Mailer
 {
-    /**
-     * Send the OTP email to a client using a WHMCS client email template.
-     *
-     * @return bool
-     */
     public static function sendCode($clientId, $code, $expiryMinutes)
     {
         $client = \Capsule::table('tblclients')->where('id', $clientId)->first();
@@ -27,7 +22,7 @@ class Mailer
         $mergeFields = [
             'code'         => $code,
             'expiry'       => $expiryMinutes,
-            'datetime'     => date('d F Y h:i A'),
+            'datetime'     => Time::displayNow(),
             'ip'           => $ip,
             'browser'      => self::browser($ua),
             'os'           => self::os($ua),

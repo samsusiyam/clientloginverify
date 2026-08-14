@@ -5,18 +5,26 @@ client login flow. After a client logs in, a one-time PIN is emailed to them and
 client area access is blocked until the PIN is verified — an extra layer of security
 against unauthorized account access.
 
+**Version: 2.0.0**
+
 ## Features
 
-- 6-digit (configurable) random OTP
+- 6-digit (configurable 4–8) random OTP generated with `random_int()`
 - OTP expiry (default 5 minutes)
-- New OTP generated on every login
+- New OTP generated on every login (previous pending codes invalidated)
 - Email delivery through the WHMCS built-in email system
 - Configurable WHMCS email template
-- Maximum verification attempts (brute-force protection)
-- Resend OTP with cooldown + max resend limits
+- Maximum verification attempts (brute-force protection, atomic + race-safe)
+- Resend OTP with cooldown + max resend limits (atomic + race-safe)
 - OTP stored **hashed** (`password_hash`) — never plaintext
-- IP address & User-Agent logging
-- Successful / failed verification logging
+- All timestamps stored in **UTC** (no timezone mismatch issues)
+- IP address & User-Agent logging (configurable)
+- Successful / failed / email-failure verification logging
+- Session regeneration on success and logout (session-fixation safe)
+- `ClientAreaPageLogin` + `ClientAreaPage` guards (hooks run at priority 100)
+- Verify page requires a valid pending login flow — no OTP auto-generation on direct access
+- Email-failure handled safely (user sees an error, never silently let through)
+- Scheduled cleanup via `DailyCronJob`
 - Enable/Disable module
 - Force 2FA for every client
 - Excluded client groups (comma-separated IDs)
@@ -76,12 +84,15 @@ against unauthorized account access.
 ```
 clientloginverify/
 ├── clientloginverify.php   # config, activate, deactivate, admin output, client area
-├── hooks.php              # ClientLogin, ClientAreaPage guard, head/footer, logout
+├── hooks.php              # ClientLogin, ClientAreaPageLogin, ClientAreaPage guards, head/footer, logout, cron
+├── whmcs.json             # WHMCS 8.x module manifest
 ├── lib/
+│   ├── Time.php           # centralized UTC time helpers
 │   ├── OTP.php            # generate / verify / hash OTP
 │   ├── Security.php       # 2FA rules, resend limits, per-client overrides
 │   ├── Mailer.php         # send OTP email via WHMCS
-│   └── Logger.php         # verification event logging
+│   ├── Logger.php         # verification event logging
+│   └── Session.php        # WHMCS\Session wrapper
 ├── templates/
 │   ├── admin.tpl          # admin dashboard
 │   ├── verify.tpl         # client OTP form

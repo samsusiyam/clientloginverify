@@ -4,6 +4,7 @@
  * Email-based two-factor authentication (2FA) for WHMCS client logins.
  */
 
+require_once __DIR__ . '/lib/Time.php';
 require_once __DIR__ . '/lib/OTP.php';
 require_once __DIR__ . '/lib/Mailer.php';
 require_once __DIR__ . '/lib/Logger.php';
@@ -15,6 +16,7 @@ use ClientLoginVerify\Mailer;
 use ClientLoginVerify\Logger;
 use ClientLoginVerify\Security;
 use ClientLoginVerify\Session;
+use ClientLoginVerify\Time;
 use Illuminate\Database\Capsule\Manager as Capsule;
 
 function clientloginverify_config()
@@ -23,7 +25,7 @@ function clientloginverify_config()
         'description' => 'Adds email-based two-factor authentication (2FA) on client login. A one-time PIN is emailed and client area access is blocked until verified.',
         'author'      => 'WHMCSModule Networks',
         'language'    => 'english',
-        'version'     => '1.0.0',
+        'version'     => '2.0.0',
         'fields'      => [
             'enableModule' => [
                 'FriendlyName' => 'Enable Module',
@@ -142,7 +144,6 @@ function clientloginverify_activate()
             });
         }
 
-        // Create the email template if it does not exist
         $templateName = 'Client Login Verification';
         $exists = \Capsule::table('tblemailtemplates')
             ->where('name', $templateName)
@@ -171,8 +172,8 @@ function clientloginverify_activate()
                 'message'    => $emailBody,
                 'disabled'   => 0,
                 'custom'     => 1,
-                'created_at' => date('Y-m-d H:i:s'),
-                'updated_at' => date('Y-m-d H:i:s'),
+                'created_at' => Time::dbNow(),
+                'updated_at' => Time::dbNow(),
             ]);
         }
 
@@ -190,7 +191,6 @@ function clientloginverify_activate()
 
 function clientloginverify_deactivate()
 {
-    // Data is preserved on deactivation.
     return [
         'status'      => 'success',
         'description' => 'Client Login Verify deactivated.',
@@ -213,13 +213,13 @@ function clientloginverify_output($vars)
             ->first();
         if ($row) {
             \Capsule::table('mod_clientloginverify_settings')->where('id', $row->id)
-                ->update(['value' => $val, 'created_at' => date('Y-m-d H:i:s')]);
+                ->update(['value' => $val, 'created_at' => Time::dbNow()]);
         } else {
             \Capsule::table('mod_clientloginverify_settings')->insert([
                 'client_id'  => $cid,
                 'setting'    => 'twofa_enabled',
                 'value'      => $val,
-                'created_at' => date('Y-m-d H:i:s'),
+                'created_at' => Time::dbNow(),
             ]);
         }
         echo '<div class="infobox"><strong>Saved.</strong></div>';
@@ -234,7 +234,6 @@ function clientloginverify_output($vars)
             ->get();
     } elseif ($view === 'clients') {
         $rows = \Capsule::table('tblclients')->orderBy('id', 'asc')->limit(100)->get();
-        // Bulk-load overrides once instead of one query per client (N+1 fix).
         $overrides = \Capsule::table('mod_clientloginverify_settings')
             ->where('setting', 'twofa_enabled')
             ->pluck('value', 'client_id');
@@ -260,7 +259,7 @@ function clientloginverify_output($vars)
     } else {
         $smartyVars['pending']   = \Capsule::table('mod_clientloginverify_codes')
             ->whereNull('verified_at')
-            ->where('expires_at', '>', date('Y-m-d H:i:s'))
+            ->where('expires_at', '>', Time::dbNow())
             ->count();
         $smartyVars['totalLogs'] = \Capsule::table('mod_clientloginverify_logs')->count();
     }
@@ -270,12 +269,20 @@ function clientloginverify_output($vars)
     echo clientloginverify_render_admin($template, $smartyVars);
 }
 
-/**
- * Render an admin template via WHMCS\Smarty, falling back to inline HTML
- * if the Smarty engine is unavailable in this context.
- */
 function clientloginverify_render_admin($template, $vars)
 {
+    if (class_exists('WHMCS\\View\\Smarty')) {
+        try {
+            $smarty = new \WHMCS\View\Smarty();
+            $smarty->setTemplateDir(__DIR__ . '/templates');
+            foreach ($vars as $k => $v) {
+                $smarty->assign($k, $v);
+            }
+            return $smarty->fetch($template);
+        } catch (\Exception $e) {
+            // fall through
+        }
+    }
     if (class_exists('WHMCS\\Smarty')) {
         try {
             $smarty = new \WHMCS\Smarty();
@@ -285,7 +292,7 @@ function clientloginverify_render_admin($template, $vars)
             }
             return $smarty->fetch($template);
         } catch (\Exception $e) {
-            // fall through to inline fallback
+            // fall through
         }
     }
     return clientloginverify_admin_fallback($vars);
@@ -355,39 +362,31 @@ function clientloginverify_clientarea($vars)
     ];
 
     if (!$clientId) {
-        return $base; // requirelogin will redirect to login
-    }
-
-    // Normal module access (e.g. client-area menu link): show a simple
-    // status page only. Never generate or email an OTP here.
-    if (!isset($_GET['clvverify']) || $_GET['clvverify'] !== '1') {
-        $base['vars']['normalview'] = true;
-        $base['vars']['lang']       = $lang;
         return $base;
     }
 
-    // On the verification page, an exempt client has nothing to verify.
+    if (!isset($_GET['clvverify']) || $_GET['clvverify'] !== '1') {
+        $base['vars']['normalview'] = true;
+        $base['vars']['lang']       = $lang;
+        Session::set('clv_on_verify_page', true);
+        return $base;
+    }
+
     if (!Security::requires2FA($clientId)) {
         redir('rp=/');
     }
 
-    // Already verified this session -> no need to re-issue a code.
     if (Session::get('clv_2fa_passed') === true) {
         redir('rp=/');
     }
 
-    $otpLength = (int) Security::setting('otpLength', 6);
-
-    // Ensure a pending code exists (e.g. direct navigation after expiry)
-    if (!isset($_POST['clv_otp']) && !(isset($_GET['action']) && $_GET['action'] === 'resend')) {
-        if (!OTP::hasPending($clientId)) {
-            $expiry      = (int) Security::setting('otpExpiry', 5);
-            $maxAttempts = (int) Security::setting('maxAttempts', 5);
-            $code = OTP::generate($clientId, $otpLength, $expiry, $maxAttempts);
-            Mailer::sendCode($clientId, $code, $expiry);
-            $base['vars']['info'] = $lang['code_resent'];
-        }
+    if (!OTP::hasPending($clientId)) {
+        Session::delete('clv_on_verify_page');
+        redir('rp=/login', 'clientarea.php');
+        exit;
     }
+
+    $otpLength = (int) Security::setting('otpLength', 6);
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clv_otp'])) {
         check_token();
@@ -395,7 +394,11 @@ function clientloginverify_clientarea($vars)
         $result = OTP::verify($clientId, $otp);
         if ($result['success']) {
             Session::set('clv_2fa_passed', true);
+            Session::delete('clv_on_verify_page');
             Logger::log($clientId, 'verified', $_SERVER['REMOTE_ADDR'] ?? null);
+            if (function_exists('session_regenerate_id')) {
+                session_regenerate_id(true);
+            }
             redir('rp=/');
         } else {
             Logger::log($clientId, 'failed', $_SERVER['REMOTE_ADDR'] ?? null, $result['message']);
@@ -403,7 +406,7 @@ function clientloginverify_clientarea($vars)
         }
     }
 
-    if (isset($_GET['action']) && $_GET['action'] === 'resend') {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['action'] === 'resend') {
         check_token();
         $res = Security::resend($clientId);
         if ($res['ok']) {
@@ -411,6 +414,13 @@ function clientloginverify_clientarea($vars)
         } else {
             $base['vars']['error'] = $res['message'];
         }
+    }
+
+    // Display email failure error from ClientLogin hook
+    $emailError = Session::get('clv_email_error');
+    if ($emailError) {
+        Session::delete('clv_email_error');
+        $base['vars']['error'] = $emailError;
     }
 
     $base['vars']['token']      = generate_token('plain');

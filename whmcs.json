@@ -1,0 +1,17 @@
+{
+    "name": "Client Login Verify",
+    "description": "Email-based two-factor authentication (2FA) for WHMCS client logins.",
+    "version": "2.0.0",
+    "author": "WHMCSModule Networks",
+    "language": "english",
+    "fields": {},
+    "hooks": [
+        "ClientLogin",
+        "ClientAreaPageLogin",
+        "ClientAreaPage",
+        "ClientAreaHeadOutput",
+        "ClientAreaFooterOutput",
+        "ClientLogout",
+        "DailyCronJob"
+    ]
+}

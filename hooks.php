@@ -4,6 +4,7 @@
  * Registers ClientLogin (send OTP), ClientAreaPage (guard) and related hooks.
  */
 
+require_once __DIR__ . '/lib/Time.php';
 require_once __DIR__ . '/lib/OTP.php';
 require_once __DIR__ . '/lib/Mailer.php';
 require_once __DIR__ . '/lib/Logger.php';
@@ -17,14 +18,15 @@ use ClientLoginVerify\Security;
 use ClientLoginVerify\Session;
 use Illuminate\Database\Capsule\Manager as Capsule;
 
-/**
- * Reliable detection of the verify page.
- * WHMCS strips $_GET['m'] before ClientAreaPage fires, so we use a custom
- * parameter (clvverify) which WHMCS never consumes. Falls back to QUERY_STRING.
- */
 if (!function_exists('clv_is_verify_page')) {
     function clv_is_verify_page()
     {
+        if (class_exists('WHMCS\\Session') && \WHMCS\Session::get('clv_on_verify_page') === true) {
+            return true;
+        }
+        if (isset($_SESSION['clv_on_verify_page'])) {
+            return true;
+        }
         if (isset($_GET['clvverify'])) {
             return true;
         }
@@ -40,7 +42,6 @@ add_hook('ClientLogin', 1, function ($vars) {
             return;
         }
 
-        // WHMCS ClientLogin hook provides 'clientID' and 'userID' (capitalised).
         $clientId = isset($vars['clientID']) ? (int) $vars['clientID']
             : (isset($vars['client_id']) ? (int) $vars['client_id'] : 0);
         $userId = isset($vars['userID']) ? (int) $vars['userID']
@@ -57,33 +58,48 @@ add_hook('ClientLogin', 1, function ($vars) {
         $expiry      = (int) Security::setting('otpExpiry', 5);
         $maxAttempts = (int) Security::setting('maxAttempts', 5);
 
-        // New login -> force re-verification
         Session::set('clv_2fa_passed', false);
+        Session::set('clv_pending_client', $clientId);
 
         $code = OTP::generate($clientId, $length, $expiry, $maxAttempts, $userId);
 
-        // Email failure MUST NOT grant access. Swallow the exception and still
-        // redirect to the verification page (fail closed).
+        $emailSent = false;
         try {
-            Mailer::sendCode($clientId, $code, $expiry);
+            $emailSent = Mailer::sendCode($clientId, $code, $expiry);
         } catch (\Exception $e) {
-            // intentionally ignored: user stays blocked until they can verify
+            $emailSent = false;
         }
-        Logger::log($clientId, 'otp_sent', $_SERVER['REMOTE_ADDR'] ?? null);
 
-        // Occasionally prune old data to keep tables bounded.
+        if (!$emailSent) {
+            Logger::log($clientId, 'email_failed', $_SERVER['REMOTE_ADDR'] ?? null, 'Failed to send OTP email');
+            Session::set('clv_email_error', 'Failed to send verification email. Please contact support or try again.');
+        } else {
+            Logger::log($clientId, 'otp_sent', $_SERVER['REMOTE_ADDR'] ?? null);
+        }
+
         if (random_int(0, 99) === 0) {
             OTP::cleanupOld();
         }
     } catch (\Exception $e) {
-        // Any failure -> still force verification (fail closed).
+        // Fail closed.
     }
 
     redir('m=clientloginverify&clvverify=1', 'clientarea.php');
     exit;
 });
 
-add_hook('ClientAreaPage', 1, function ($vars) {
+add_hook('ClientAreaPageLogin', 100, function ($vars) {
+    if (Security::setting('enableModule', 'on') !== 'on') {
+        return;
+    }
+    $clientId = Session::get('uid');
+    if ($clientId && Security::requires2FA($clientId) && Session::get('clv_2fa_passed') !== true) {
+        redir('m=clientloginverify&clvverify=1', 'clientarea.php');
+        exit;
+    }
+});
+
+add_hook('ClientAreaPage', 100, function ($vars) {
     try {
         if (Security::setting('enableModule', 'on') !== 'on') {
             return;
@@ -94,6 +110,7 @@ add_hook('ClientAreaPage', 1, function ($vars) {
             return;
         }
         if (clv_is_verify_page()) {
+            Session::delete('clv_on_verify_page');
             return;
         }
         if (Session::get('clv_2fa_passed') === true) {
@@ -103,14 +120,9 @@ add_hook('ClientAreaPage', 1, function ($vars) {
             return;
         }
 
-        // Required but not yet verified (no matter whether a code is pending or
-        // expired) -> force the verification page. The verify page re-issues a
-        // fresh code when the previous one has expired.
         redir('m=clientloginverify&clvverify=1', 'clientarea.php');
         exit;
     } catch (\Exception $e) {
-        // Fail closed: if we cannot confirm verification state, force the
-        // verification page rather than rendering protected content.
         if (!clv_is_verify_page()) {
             redir('m=clientloginverify&clvverify=1', 'clientarea.php');
             exit;
@@ -144,4 +156,18 @@ add_hook('ClientLogout', 1, function ($vars) {
             ->delete();
     }
     Session::delete('clv_2fa_passed');
+    Session::delete('clv_pending_client');
+    Session::delete('clv_on_verify_page');
+    Session::delete('clv_email_error');
+    if (function_exists('session_regenerate_id')) {
+        session_regenerate_id(true);
+    }
+});
+
+add_hook('DailyCronJob', 1, function () {
+    try {
+        \ClientLoginVerify\OTP::cleanupOld(30, 90);
+    } catch (\Exception $e) {
+        logActivity('Client Login Verify cleanup failed: ' . $e->getMessage());
+    }
 });
