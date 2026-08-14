@@ -8,4 +8,5 @@
 <p>
     <a class="btn btn-default" href="{$modulelink}&view=clients">Client 2FA Status</a>
     <a class="btn btn-default" href="{$modulelink}&view=logs">View Logs</a>
+    <a class="btn btn-primary" href="{$modulelink}&view=settings">Module Settings</a>
 </p>

@@ -254,6 +254,15 @@ function clientloginverify_output($vars)
     $view   = isset($_REQUEST['view']) ? $_REQUEST['view'] : '';
     $action = isset($_REQUEST['action']) ? $_REQUEST['action'] : '';
 
+    // Save the module settings edited from within this admin page (instead of
+    // the separate "Configure" screen).
+    if ($action === 'savesettings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        check_token();
+        clientloginverify_save_settings($_POST);
+        echo '<div class="infobox"><strong>Settings saved.</strong></div>';
+        $view = 'settings';
+    }
+
     if ($action === 'setclient' && isset($_REQUEST['client_id'], $_REQUEST['val'])) {
         check_token();
         $cid = (int) $_REQUEST['client_id'];
@@ -274,6 +283,12 @@ function clientloginverify_output($vars)
             ]);
         }
         echo '<div class="infobox"><strong>Saved.</strong></div>';
+    }
+
+    // Settings editor lives inside this page — render and return early.
+    if ($view === 'settings') {
+        echo clientloginverify_settings_form($modulelink, $logoUrl);
+        return;
     }
 
     $smartyVars = ['modulelink' => $modulelink, 'view' => $view, 'logo_url' => $logoUrl];
@@ -318,6 +333,109 @@ function clientloginverify_output($vars)
     $template = ($view === 'clients' || $view === 'logs') ? 'settings.tpl' : 'admin.tpl';
 
     echo clientloginverify_render_admin($template, $smartyVars);
+}
+
+/**
+ * Definition of the module settings that are editable from inside the admin
+ * output page. Stored in tbladdonmodules (same table WHMCS uses for the
+ * built-in Configure screen), so both stay in sync.
+ */
+function clientloginverify_settings_fields()
+{
+    return [
+        'enableModule'      => ['label' => 'Enable Module', 'type' => 'yesno', 'default' => 'on', 'desc' => 'Enable email 2FA for client logins'],
+        'forceVerification' => ['label' => 'Force Verification', 'type' => 'yesno', 'default' => 'on', 'desc' => 'Require 2FA for every client login'],
+        'otpLength'         => ['label' => 'OTP Length', 'type' => 'text', 'default' => '6', 'desc' => 'Number of digits in the OTP (4-8)'],
+        'otpExpiry'         => ['label' => 'OTP Expiry (minutes)', 'type' => 'text', 'default' => '5', 'desc' => 'How long the OTP remains valid'],
+        'maxAttempts'       => ['label' => 'Maximum Attempts', 'type' => 'text', 'default' => '5', 'desc' => 'Max incorrect entries before lockout'],
+        'resendCooldown'    => ['label' => 'Resend Cooldown (seconds)', 'type' => 'text', 'default' => '60', 'desc' => 'Wait time before a new code can be requested'],
+        'maxResends'        => ['label' => 'Maximum Resends', 'type' => 'text', 'default' => '3', 'desc' => 'How many times a code can be resent'],
+        'emailTemplate'     => ['label' => 'Email Template', 'type' => 'text', 'default' => 'Client Login Verification', 'desc' => 'Name of the WHMCS client email template'],
+        'logAttempts'       => ['label' => 'Log Attempts', 'type' => 'yesno', 'default' => 'on', 'desc' => 'Record verification events'],
+        'logIp'             => ['label' => 'Log IP Address', 'type' => 'yesno', 'default' => 'on', 'desc' => 'Store client IP with each log entry'],
+        'excludedGroups'    => ['label' => 'Excluded Client Groups', 'type' => 'text', 'default' => '', 'desc' => 'Comma separated client group IDs to skip 2FA'],
+    ];
+}
+
+function clientloginverify_get_setting($key, $default = '')
+{
+    $val = \Capsule::table('tbladdonmodules')
+        ->where('module', 'clientloginverify')
+        ->where('setting', $key)
+        ->value('value');
+    return ($val === null) ? $default : $val;
+}
+
+/**
+ * Persist submitted settings into tbladdonmodules and clear the runtime cache.
+ */
+function clientloginverify_save_settings(array $post)
+{
+    foreach (clientloginverify_settings_fields() as $key => $field) {
+        if ($field['type'] === 'yesno') {
+            $value = (isset($post[$key]) && $post[$key] === 'on') ? 'on' : '';
+        } else {
+            $value = isset($post[$key]) ? trim((string) $post[$key]) : '';
+        }
+
+        $exists = \Capsule::table('tbladdonmodules')
+            ->where('module', 'clientloginverify')
+            ->where('setting', $key)
+            ->exists();
+
+        if ($exists) {
+            \Capsule::table('tbladdonmodules')
+                ->where('module', 'clientloginverify')
+                ->where('setting', $key)
+                ->update(['value' => $value]);
+        } else {
+            \Capsule::table('tbladdonmodules')->insert([
+                'module'  => 'clientloginverify',
+                'setting' => $key,
+                'value'   => $value,
+            ]);
+        }
+    }
+}
+
+/**
+ * Renders the settings editor form shown inside the addon page.
+ */
+function clientloginverify_settings_form($modulelink, $logoUrl)
+{
+    $fields = clientloginverify_settings_fields();
+    $token  = generate_token('link');
+
+    $html  = '<img src="' . htmlspecialchars($logoUrl) . '" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;">';
+    $html .= '<h2>Module Settings</h2>';
+    $html .= '<p><a href="' . htmlspecialchars($modulelink) . '">&laquo; Back to Dashboard</a></p>';
+    $html .= '<form method="post" action="' . htmlspecialchars($modulelink) . '&action=savesettings">';
+    $html .= $token;
+    $html .= '<input type="hidden" name="action" value="savesettings">';
+    $html .= '<table class="form" width="100%" border="0" cellspacing="1" cellpadding="3">';
+
+    foreach ($fields as $key => $field) {
+        $current = clientloginverify_get_setting($key, $field['default']);
+        $html .= '<tr><td class="fieldlabel" width="30%"><strong>' . htmlspecialchars($field['label']) . '</strong></td><td class="fieldarea">';
+
+        if ($field['type'] === 'yesno') {
+            $checked = ($current === 'on') ? ' checked' : '';
+            $html .= '<label><input type="checkbox" name="' . htmlspecialchars($key) . '" value="on"' . $checked . '> Enabled</label>';
+        } else {
+            $html .= '<input type="text" name="' . htmlspecialchars($key) . '" value="' . htmlspecialchars((string) $current) . '" style="min-width:220px;">';
+        }
+
+        if (!empty($field['desc'])) {
+            $html .= '<br><span style="color:#777;font-size:12px;">' . htmlspecialchars($field['desc']) . '</span>';
+        }
+        $html .= '</td></tr>';
+    }
+
+    $html .= '</table>';
+    $html .= '<p><input type="submit" value="Save Changes" class="btn btn-primary"></p>';
+    $html .= '</form>';
+
+    return $html;
 }
 
 function clientloginverify_render_admin($template, $vars)
@@ -388,7 +506,8 @@ function clientloginverify_admin_fallback($vars)
         . '<ul><li><strong>Pending verifications:</strong> ' . (int) ($vars['pending'] ?? 0) . '</li>'
         . '<li><strong>Total log entries:</strong> ' . (int) ($vars['totalLogs'] ?? 0) . '</li></ul>'
         . '<p><a class="btn btn-default" href="' . $modulelink . '&view=clients">Client 2FA Status</a> '
-        . '<a class="btn btn-default" href="' . $modulelink . '&view=logs">View Logs</a></p>';
+        . '<a class="btn btn-default" href="' . $modulelink . '&view=logs">View Logs</a> '
+        . '<a class="btn btn-primary" href="' . $modulelink . '&view=settings">Module Settings</a></p>';
 }
 
 function clientloginverify_lang()
