@@ -102,55 +102,63 @@ function clientloginverify_config()
 function clientloginverify_activate()
 {
     try {
-        if (!\Capsule::schema()->hasTable('mod_clientloginverify_codes')) {
-            \Capsule::schema()->create('mod_clientloginverify_codes', function ($table) {
-                $table->increments('id');
-                $table->integer('user_id')->unsigned()->nullable();
-                $table->integer('client_id')->unsigned();
-                $table->string('otp_hash', 255);
-                $table->dateTime('expires_at');
-                $table->integer('attempts')->default(0);
-                $table->integer('max_attempts')->default(5);
-                $table->integer('resends')->default(0);
-                $table->string('ip_address', 45)->nullable();
-                $table->text('user_agent')->nullable();
-                $table->dateTime('verified_at')->nullable();
-                $table->dateTime('created_at')->nullable();
-                $table->index('client_id');
-            });
+        // Use WHMCS database functions (always available during activation)
+        $tables = [
+            'mod_clientloginverify_codes' => "
+                CREATE TABLE IF NOT EXISTS `mod_clientloginverify_codes` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `user_id` int(10) unsigned DEFAULT NULL,
+                    `client_id` int(10) unsigned NOT NULL,
+                    `otp_hash` varchar(255) NOT NULL,
+                    `expires_at` datetime NOT NULL,
+                    `attempts` int(10) unsigned NOT NULL DEFAULT '0',
+                    `max_attempts` int(10) unsigned NOT NULL DEFAULT '5',
+                    `resends` int(10) unsigned NOT NULL DEFAULT '0',
+                    `ip_address` varchar(45) DEFAULT NULL,
+                    `user_agent` text DEFAULT NULL,
+                    `verified_at` datetime DEFAULT NULL,
+                    `created_at` datetime DEFAULT NULL,
+                    PRIMARY KEY (`id`),
+                    KEY `client_id` (`client_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ",
+            'mod_clientloginverify_logs' => "
+                CREATE TABLE IF NOT EXISTS `mod_clientloginverify_logs` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `client_id` int(10) unsigned DEFAULT NULL,
+                    `event` varchar(50) NOT NULL,
+                    `ip` varchar(45) DEFAULT NULL,
+                    `user_agent` text DEFAULT NULL,
+                    `message` text DEFAULT NULL,
+                    `created_at` datetime DEFAULT NULL,
+                    PRIMARY KEY (`id`),
+                    KEY `client_id` (`client_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ",
+            'mod_clientloginverify_settings' => "
+                CREATE TABLE IF NOT EXISTS `mod_clientloginverify_settings` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `client_id` int(10) unsigned NOT NULL,
+                    `setting` varchar(50) NOT NULL,
+                    `value` text DEFAULT NULL,
+                    `created_at` datetime DEFAULT NULL,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `client_setting` (`client_id`, `setting`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ",
+        ];
+
+        foreach ($tables as $table => $sql) {
+            full_query($sql);
         }
 
-        if (!\Capsule::schema()->hasTable('mod_clientloginverify_logs')) {
-            \Capsule::schema()->create('mod_clientloginverify_logs', function ($table) {
-                $table->increments('id');
-                $table->integer('client_id')->unsigned()->nullable();
-                $table->string('event', 50);
-                $table->string('ip', 45)->nullable();
-                $table->text('user_agent')->nullable();
-                $table->text('message')->nullable();
-                $table->dateTime('created_at')->nullable();
-                $table->index('client_id');
-            });
-        }
-
-        if (!\Capsule::schema()->hasTable('mod_clientloginverify_settings')) {
-            \Capsule::schema()->create('mod_clientloginverify_settings', function ($table) {
-                $table->increments('id');
-                $table->integer('client_id')->unsigned();
-                $table->string('setting', 50);
-                $table->text('value')->nullable();
-                $table->dateTime('created_at')->nullable();
-                $table->unique(['client_id', 'setting']);
-            });
-        }
-
+        // Create email template if not exists
         $templateName = 'Client Login Verification';
-        $exists = \Capsule::table('tblemailtemplates')
-            ->where('name', $templateName)
-            ->where('type', 'client')
-            ->exists();
-
-        if (!$exists) {
+        $result = select_query('tblemailtemplates', 'id', [
+            'name' => $templateName,
+            'type' => 'client',
+        ]);
+        if (!$result || mysql_num_rows($result) === 0) {
             $emailBody = "Hello {\$client_name},\r\n\r\n"
                 . "A login attempt was made to your account.\r\n\r\n"
                 . "Your verification code is:\r\n\r\n"
@@ -165,7 +173,7 @@ function clientloginverify_activate()
                 . "Regards,\r\n"
                 . "{\$company_name}";
 
-            \Capsule::table('tblemailtemplates')->insert([
+            insert_query('tblemailtemplates', [
                 'type'       => 'client',
                 'name'       => $templateName,
                 'subject'    => 'Your Login Verification Code',
@@ -208,9 +216,10 @@ function clientloginverify_asset_url($file)
 {
     $base = '';
     try {
-        $cfg = \Capsule::table('tblconfiguration')->where('setting', 'SystemURL')->value('value');
-        if ($cfg) {
-            $base = rtrim($cfg, '/');
+        // Use WHMCS database function instead of Capsule for compatibility
+        $result = select_query('tblconfiguration', 'value', ['setting' => 'SystemURL']);
+        if ($result && $row = mysql_fetch_assoc($result)) {
+            $base = rtrim($row['value'], '/');
         }
     } catch (\Exception $e) {
         $base = '';
