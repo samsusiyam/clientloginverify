@@ -1,3 +1,4 @@
+<img src="{$logo_url}" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;">
 {if $view eq 'logs'}
     <h2>Verification Logs</h2>
     <p><a href="{$modulelink}">&laquo; Back</a></p>

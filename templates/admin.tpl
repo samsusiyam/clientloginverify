@@ -1,3 +1,4 @@
+<img src="{$logo_url}" alt="Client Login Verify" style="max-height:64px;margin-bottom:12px;">
 <h2>Client Login Verify</h2>
 <p>Email-based two-factor authentication (2FA) for WHMCS client logins.</p>
 <ul>

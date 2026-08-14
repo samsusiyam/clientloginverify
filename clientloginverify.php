@@ -22,10 +22,10 @@ use Illuminate\Database\Capsule\Manager as Capsule;
 function clientloginverify_config()
 {
     return [
-        'description' => 'Adds email-based two-factor authentication (2FA) on client login. A one-time PIN is emailed and client area access is blocked until verified.',
-        'author'      => 'WHMCSModule Networks',
+        'description' => 'Email-based two-factor authentication (2FA) for WHMCS client logins. After a successful password login, a one-time verification code is emailed to the client and all client-area pages stay locked until the code is entered — protecting accounts from password theft and unauthorized access.',
+        'author'      => 'Host Nibo',
         'language'    => 'english',
-        'version'     => '2.0.1',
+        'version'     => '1.0',
         'fields'      => [
             'enableModule' => [
                 'FriendlyName' => 'Enable Module',
@@ -204,9 +204,28 @@ function clientloginverify_admin_permissions()
     ];
 }
 
+function clientloginverify_asset_url($file)
+{
+    $base = '';
+    try {
+        $cfg = \Capsule::table('tblconfiguration')->where('setting', 'SystemURL')->value('value');
+        if ($cfg) {
+            $base = rtrim($cfg, '/');
+        }
+    } catch (\Exception $e) {
+        $base = '';
+    }
+    if (!$base && isset($_SERVER['HTTP_HOST'])) {
+        $proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $base = $proto . '://' . $_SERVER['HTTP_HOST'];
+    }
+    return $base . '/modules/addons/clientloginverify/' . ltrim($file, '/');
+}
+
 function clientloginverify_output($vars)
 {
     $modulelink = $vars['modulelink'];
+    $logoUrl = clientloginverify_asset_url('assets/logo.jpg');
     $view   = isset($_REQUEST['view']) ? $_REQUEST['view'] : '';
     $action = isset($_REQUEST['action']) ? $_REQUEST['action'] : '';
 
@@ -232,7 +251,7 @@ function clientloginverify_output($vars)
         echo '<div class="infobox"><strong>Saved.</strong></div>';
     }
 
-    $smartyVars = ['modulelink' => $modulelink, 'view' => $view];
+    $smartyVars = ['modulelink' => $modulelink, 'view' => $view, 'logo_url' => $logoUrl];
 
     if ($view === 'logs') {
         $smartyVars['logs'] = \Capsule::table('mod_clientloginverify_logs')
@@ -311,7 +330,8 @@ function clientloginverify_admin_fallback($vars)
     $view = isset($vars['view']) ? $vars['view'] : '';
 
     if ($view === 'logs') {
-        $html = '<h2>Verification Logs</h2><p><a href="' . $modulelink . '">&laquo; Back</a></p>'
+        $html = '<p><img src="' . htmlspecialchars($vars['logo_url']) . '" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;"></p>'
+            . '<h2>Verification Logs</h2><p><a href="' . $modulelink . '">&laquo; Back</a></p>'
             . '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">'
             . '<thead><tr><th>Client ID</th><th>Event</th><th>IP</th><th>Message</th><th>Date/Time</th></tr></thead><tbody>';
         foreach ($vars['logs'] as $log) {
@@ -323,7 +343,8 @@ function clientloginverify_admin_fallback($vars)
     }
 
     if ($view === 'clients') {
-        $html = '<h2>Client 2FA Status</h2><p><a href="' . $modulelink . '">&laquo; Back</a></p>'
+        $html = '<p><img src="' . htmlspecialchars($vars['logo_url']) . '" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;"></p>'
+            . '<h2>Client 2FA Status</h2><p><a href="' . $modulelink . '">&laquo; Back</a></p>'
             . '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">'
             . '<thead><tr><th>ID</th><th>Name</th><th>Group</th><th>2FA</th><th>Action</th></tr></thead><tbody>';
         foreach ($vars['clients'] as $c) {
@@ -336,7 +357,8 @@ function clientloginverify_admin_fallback($vars)
         return $html . '</tbody></table>';
     }
 
-    return '<h2>Client Login Verify</h2>'
+    return '<p><img src="' . htmlspecialchars($vars['logo_url']) . '" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;"></p>'
+        . '<h2>Client Login Verify</h2>'
         . '<p>Email-based two-factor authentication for client logins.</p>'
         . '<ul><li><strong>Pending verifications:</strong> ' . (int) ($vars['pending'] ?? 0) . '</li>'
         . '<li><strong>Total log entries:</strong> ' . (int) ($vars['totalLogs'] ?? 0) . '</li></ul>'
