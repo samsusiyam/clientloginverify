@@ -257,7 +257,9 @@ function clientloginverify_output($vars)
 
 function clientloginverify_admin_token()
 {
-    return function_exists('generate_token') ? generate_token('link') : '';
+    // 'form' returns the ready-made <input type="hidden" name="token" ...>.
+    // Using 'link' here would emit "token=HASH" as visible text inside the form.
+    return function_exists('generate_token') ? generate_token('form') : '';
 }
 
 function clientloginverify_render_header($modulelink, $logo, $view, $notice, $noticeType)
