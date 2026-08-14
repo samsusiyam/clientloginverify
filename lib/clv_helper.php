@@ -339,7 +339,10 @@ class CLV
 
     public static function verifyUrl()
     {
-        return 'clientarea.php?m=' . self::MODULE . '&clvverify=1';
+        // Addon module client-area pages are served by index.php?m=<module>,
+        // NOT clientarea.php. Using clientarea.php makes WHMCS ignore the m=
+        // parameter and render the normal dashboard, so no verify page shows.
+        return 'index.php?m=' . self::MODULE . '&clvverify=1';
     }
 
     /**
