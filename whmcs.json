@@ -1,8 +1,24 @@
 {
-    "name": "Client Login Verify",
-    "description": "Email based two factor authentication (2FA) for WHMCS client logins. After a successful password login a one time verification code is emailed to the client and every client area page stays locked until the code is entered.",
-    "version": "3.0",
-    "author": "Host Nibo",
+    "schema": "1.0",
     "type": "addon",
-    "language": "english"
+    "name": "clientloginverify",
+    "license": "proprietary",
+    "category": "security",
+    "description": {
+        "name": "Client Login Verify",
+        "tagline": "Email based two-factor authentication (2FA) for client logins.",
+        "long": "Client Login Verify adds email based two-factor authentication to WHMCS client logins. After a successful password login a one time verification code is emailed to the client through your existing WHMCS mail configuration, and every client area page stays locked until the code is entered. Features per-client and per-group control, configurable code length and expiry, attempt and resend limits, a per-IP brute-force throttle, and a full verification log."
+    },
+    "logo": {
+        "filename": "assets/logo.jpg"
+    },
+    "support": {
+        "homepage": "https://github.com/samsusiyam/clientloginverify"
+    },
+    "authors": [
+        {
+            "name": "Host Nibo",
+            "homepage": "https://www.hostnibo.com/"
+        }
+    ]
 }
