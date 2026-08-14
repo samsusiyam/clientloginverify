@@ -331,22 +331,49 @@ class CLV
     }
 
     /**
-     * Mark 2FA as passed for the current session, bound to a specific client id
-     * so a leftover flag can never satisfy the guard for a different account.
+     * Mark 2FA as passed for the current session.
+     *
+     * The pass is bound to BOTH the client id and the current PHP session id.
+     * WHMCS regenerates the session id on every real login, so a pass flag left
+     * over from a previous login can never match the new session - this forces
+     * re-verification after logout/login even if our ClientLogin/ClientLogout
+     * hooks do not fire (auto re-login, partial session clear, etc.).
      */
     public static function markPassed($clientId)
     {
         self::sessionSet('clv_passed', true);
         self::sessionSet('clv_passed_uid', (int) $clientId);
+        self::sessionSet('clv_passed_sid', self::sessionId());
     }
 
     /**
-     * True only if 2FA was passed in this session for exactly this client id.
+     * True only if 2FA was passed in this session, for exactly this client id,
+     * and under the current session id.
      */
     public static function passedFor($clientId)
     {
-        return (self::sessionGet('clv_passed') === true
-            && (int) self::sessionGet('clv_passed_uid') === (int) $clientId);
+        if (self::sessionGet('clv_passed') !== true) {
+            return false;
+        }
+        if ((int) self::sessionGet('clv_passed_uid') !== (int) $clientId) {
+            return false;
+        }
+        $sid = self::sessionId();
+        // If we cannot read a session id, fall back to uid-only matching rather
+        // than locking the client out.
+        if ($sid !== '' && (string) self::sessionGet('clv_passed_sid') !== $sid) {
+            return false;
+        }
+        return true;
+    }
+
+    public static function sessionId()
+    {
+        if (function_exists('session_id')) {
+            $id = @session_id();
+            return $id ? (string) $id : '';
+        }
+        return '';
     }
 
     /**
