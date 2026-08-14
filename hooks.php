@@ -9,7 +9,6 @@ use ClientLoginVerify\Mailer;
 use ClientLoginVerify\Logger;
 use ClientLoginVerify\Security;
 use ClientLoginVerify\Session;
-use Illuminate\Database\Capsule\Manager as Capsule;
 
 if (!defined('WHMCS')) {
     die('This file cannot be accessed directly.');
@@ -158,7 +157,7 @@ add_hook('ClientLogout', 1, function ($vars) {
     $clientId = isset($vars['clientID']) ? (int) $vars['clientID']
         : (isset($vars['client_id']) ? (int) $vars['client_id'] : 0);
     if ($clientId) {
-        \Capsule::table('mod_clientloginverify_codes')
+        \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
             ->delete();

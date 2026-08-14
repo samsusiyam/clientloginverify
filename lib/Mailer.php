@@ -10,14 +10,14 @@ class Mailer
 {
     public static function sendCode($clientId, $code, $expiryMinutes)
     {
-        $client = \Capsule::table('tblclients')->where('id', $clientId)->first();
+        $client = \WHMCS\Database\Capsule::table('tblclients')->where('id', $clientId)->first();
         if (!$client) {
             return false;
         }
 
         $ip = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
         $ua = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
-        $company = \Capsule::table('tblconfiguration')->where('setting', 'CompanyName')->value('value');
+        $company = \WHMCS\Database\Capsule::table('tblconfiguration')->where('setting', 'CompanyName')->value('value');
 
         $mergeFields = [
             'code'         => $code,
@@ -35,7 +35,7 @@ class Mailer
 
     protected static function templateName()
     {
-        $val = \Capsule::table('tbladdonmodules')
+        $val = \WHMCS\Database\Capsule::table('tbladdonmodules')
             ->where('module', 'clientloginverify')
             ->where('setting', 'emailTemplate')
             ->value('value');

@@ -24,7 +24,7 @@ class Security
             return self::$cache[$key];
         }
 
-        $val = \Capsule::table('tbladdonmodules')
+        $val = \WHMCS\Database\Capsule::table('tbladdonmodules')
             ->where('module', 'clientloginverify')
             ->where('setting', $key)
             ->value('value');
@@ -65,7 +65,7 @@ class Security
 
     public static function canResend($clientId)
     {
-        $row = \Capsule::table('mod_clientloginverify_codes')
+        $row = \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
             ->orderBy('created_at', 'desc')
@@ -101,7 +101,7 @@ class Security
         $window = 15; // minutes
         $limit  = 50; // max failed verifications per IP per window
         $cutoff = Time::dbFromTimestamp(Time::timestamp() - $window * 60);
-        $count  = \Capsule::table('mod_clientloginverify_logs')
+        $count  = \WHMCS\Database\Capsule::table('mod_clientloginverify_logs')
             ->where('event', 'failed')
             ->where('ip', $ip)
             ->where('created_at', '>', $cutoff)
@@ -123,7 +123,7 @@ class Security
         // because the first one resets created_at, so the second fails the
         // cooldown check. Uses UTC_TIMESTAMP() to stay consistent with the
         // UTC-stored created_at column regardless of DB/PHP timezone.
-        $affected = \Capsule::table('mod_clientloginverify_codes')
+        $affected = \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
             ->where('resends', '<', $maxResends)
@@ -133,11 +133,11 @@ class Security
                 'expires_at' => Time::dbExpires($expiry),
                 'created_at' => Time::dbNow(),
                 'attempts'   => 0,
-                'resends'    => \Capsule::raw('resends + 1'),
+                'resends'    => \WHMCS\Database\Capsule::raw('resends + 1'),
             ]);
 
         if (!$affected) {
-            $row = \Capsule::table('mod_clientloginverify_codes')
+            $row = \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
                 ->where('client_id', $clientId)
                 ->whereNull('verified_at')
                 ->orderBy('created_at', 'desc')
@@ -161,7 +161,7 @@ class Security
         if (!$emailSent) {
             // Roll back the resend increment so a failed email does not consume
             // a resend attempt.
-            \Capsule::table('mod_clientloginverify_codes')
+            \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
                 ->where('client_id', $clientId)
                 ->whereNull('verified_at')
                 ->where('resends', '>', 0)
@@ -175,7 +175,7 @@ class Security
 
     protected static function perClientValue($clientId)
     {
-        $row = \Capsule::table('mod_clientloginverify_settings')
+        $row = \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')
             ->where('client_id', $clientId)
             ->where('setting', 'twofa_enabled')
             ->first();
@@ -188,7 +188,7 @@ class Security
         if (!$groups) {
             return false;
         }
-        $client = \Capsule::table('tblclients')->where('id', $clientId)->first();
+        $client = \WHMCS\Database\Capsule::table('tblclients')->where('id', $clientId)->first();
         if (!$client || !$client->groupid) {
             return false;
         }

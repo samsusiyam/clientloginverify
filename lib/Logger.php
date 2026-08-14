@@ -10,7 +10,7 @@ class Logger
 {
     public static function log($clientId, $event, $ip = null, $message = null)
     {
-        $logAttempts = \Capsule::table('tbladdonmodules')
+        $logAttempts = \WHMCS\Database\Capsule::table('tbladdonmodules')
             ->where('module', 'clientloginverify')
             ->where('setting', 'logAttempts')
             ->value('value');
@@ -18,12 +18,12 @@ class Logger
             return;
         }
 
-        $logIp = \Capsule::table('tbladdonmodules')
+        $logIp = \WHMCS\Database\Capsule::table('tbladdonmodules')
             ->where('module', 'clientloginverify')
             ->where('setting', 'logIp')
             ->value('value');
 
-        \Capsule::table('mod_clientloginverify_logs')->insert([
+        \WHMCS\Database\Capsule::table('mod_clientloginverify_logs')->insert([
             'client_id'  => $clientId,
             'event'      => $event,
             'ip'         => ($logIp === 'on') ? substr((string) $ip, 0, 45) : null,

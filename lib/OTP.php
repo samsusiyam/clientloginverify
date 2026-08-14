@@ -10,7 +10,7 @@ class OTP
 {
     public static function generate($clientId, $length = 6, $expiryMinutes = 5, $maxAttempts = 5, $userId = null)
     {
-        \Capsule::table('mod_clientloginverify_codes')
+        \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
             ->delete();
@@ -18,7 +18,7 @@ class OTP
         $code = self::random($length);
         $hash = password_hash($code, PASSWORD_DEFAULT);
 
-        \Capsule::table('mod_clientloginverify_codes')->insert([
+        \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')->insert([
             'user_id'      => $userId ? (int) $userId : null,
             'client_id'    => $clientId,
             'otp_hash'     => $hash,
@@ -42,7 +42,7 @@ class OTP
             return ['success' => false, 'message' => 'Too many verification attempts from your network. Please try again later.'];
         }
 
-        $row = \Capsule::table('mod_clientloginverify_codes')
+        $row = \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
             ->orderBy('created_at', 'desc')
@@ -58,7 +58,7 @@ class OTP
             return ['success' => false, 'message' => 'Too many incorrect attempts. Please request a new code.'];
         }
 
-        $updated = \Capsule::table('mod_clientloginverify_codes')
+        $updated = \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->where('id', $row->id)
             ->where('attempts', '<', $row->max_attempts)
             ->increment('attempts');
@@ -67,10 +67,10 @@ class OTP
             return ['success' => false, 'message' => 'Too many incorrect attempts. Please request a new code.'];
         }
 
-        $row = \Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)->first();
+        $row = \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)->first();
 
         if (password_verify($input, $row->otp_hash)) {
-            \Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)
+            \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)
                 ->update(['verified_at' => Time::dbNow()]);
             return ['success' => true];
         }
@@ -80,7 +80,7 @@ class OTP
 
     public static function hasPending($clientId)
     {
-        return \Capsule::table('mod_clientloginverify_codes')
+        return \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
             ->where('expires_at', '>', Time::dbNow())
@@ -92,12 +92,12 @@ class OTP
         $cutoffCodes = Time::dbFromTimestamp(Time::timestamp() - ($codesDays * 86400));
         $cutoffLogs  = Time::dbFromTimestamp(Time::timestamp() - ($logsDays * 86400));
 
-        \Capsule::table('mod_clientloginverify_codes')
+        \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->whereNotNull('verified_at')
             ->where('created_at', '<', $cutoffCodes)
             ->delete();
 
-        \Capsule::table('mod_clientloginverify_logs')
+        \WHMCS\Database\Capsule::table('mod_clientloginverify_logs')
             ->where('created_at', '<', $cutoffLogs)
             ->delete();
     }

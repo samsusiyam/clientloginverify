@@ -10,7 +10,6 @@ use ClientLoginVerify\Logger;
 use ClientLoginVerify\Security;
 use ClientLoginVerify\Session;
 use ClientLoginVerify\Time;
-use Illuminate\Database\Capsule\Manager as Capsule;
 
 if (!defined('WHMCS')) {
     die('This file cannot be accessed directly.');
@@ -267,15 +266,15 @@ function clientloginverify_output($vars)
         check_token();
         $cid = (int) $_REQUEST['client_id'];
         $val = ($_REQUEST['val'] === 'on') ? 'on' : 'off';
-        $row = \Capsule::table('mod_clientloginverify_settings')
+        $row = \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')
             ->where('client_id', $cid)
             ->where('setting', 'twofa_enabled')
             ->first();
         if ($row) {
-            \Capsule::table('mod_clientloginverify_settings')->where('id', $row->id)
+            \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')->where('id', $row->id)
                 ->update(['value' => $val, 'created_at' => Time::dbNow()]);
         } else {
-            \Capsule::table('mod_clientloginverify_settings')->insert([
+            \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')->insert([
                 'client_id'  => $cid,
                 'setting'    => 'twofa_enabled',
                 'value'      => $val,
@@ -294,13 +293,13 @@ function clientloginverify_output($vars)
     $smartyVars = ['modulelink' => $modulelink, 'view' => $view, 'logo_url' => $logoUrl];
 
     if ($view === 'logs') {
-        $smartyVars['logs'] = \Capsule::table('mod_clientloginverify_logs')
+        $smartyVars['logs'] = \WHMCS\Database\Capsule::table('mod_clientloginverify_logs')
             ->orderBy('created_at', 'desc')
             ->limit(200)
             ->get();
     } elseif ($view === 'clients') {
-        $rows = \Capsule::table('tblclients')->orderBy('id', 'asc')->limit(100)->get();
-        $overrides = \Capsule::table('mod_clientloginverify_settings')
+        $rows = \WHMCS\Database\Capsule::table('tblclients')->orderBy('id', 'asc')->limit(100)->get();
+        $overrides = \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')
             ->where('setting', 'twofa_enabled')
             ->pluck('value', 'client_id');
         $clients = [];
@@ -323,11 +322,11 @@ function clientloginverify_output($vars)
         $smartyVars['clients'] = $clients;
         $smartyVars['token']   = generate_token('link');
     } else {
-        $smartyVars['pending']   = \Capsule::table('mod_clientloginverify_codes')
+        $smartyVars['pending']   = \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
             ->whereNull('verified_at')
             ->where('expires_at', '>', Time::dbNow())
             ->count();
-        $smartyVars['totalLogs'] = \Capsule::table('mod_clientloginverify_logs')->count();
+        $smartyVars['totalLogs'] = \WHMCS\Database\Capsule::table('mod_clientloginverify_logs')->count();
     }
 
     $template = ($view === 'clients' || $view === 'logs') ? 'settings.tpl' : 'admin.tpl';
@@ -359,7 +358,7 @@ function clientloginverify_settings_fields()
 
 function clientloginverify_get_setting($key, $default = '')
 {
-    $val = \Capsule::table('tbladdonmodules')
+    $val = \WHMCS\Database\Capsule::table('tbladdonmodules')
         ->where('module', 'clientloginverify')
         ->where('setting', $key)
         ->value('value');
@@ -378,18 +377,18 @@ function clientloginverify_save_settings(array $post)
             $value = isset($post[$key]) ? trim((string) $post[$key]) : '';
         }
 
-        $exists = \Capsule::table('tbladdonmodules')
+        $exists = \WHMCS\Database\Capsule::table('tbladdonmodules')
             ->where('module', 'clientloginverify')
             ->where('setting', $key)
             ->exists();
 
         if ($exists) {
-            \Capsule::table('tbladdonmodules')
+            \WHMCS\Database\Capsule::table('tbladdonmodules')
                 ->where('module', 'clientloginverify')
                 ->where('setting', $key)
                 ->update(['value' => $value]);
         } else {
-            \Capsule::table('tbladdonmodules')->insert([
+            \WHMCS\Database\Capsule::table('tbladdonmodules')->insert([
                 'module'  => 'clientloginverify',
                 'setting' => $key,
                 'value'   => $value,
