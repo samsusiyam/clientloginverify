@@ -15,6 +15,7 @@ use ClientLoginVerify\Mailer;
 use ClientLoginVerify\Logger;
 use ClientLoginVerify\Security;
 use ClientLoginVerify\Session;
+use Illuminate\Database\Capsule\Manager as Capsule;
 
 /**
  * Reliable detection of the verify page.
