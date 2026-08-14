@@ -36,6 +36,12 @@ class OTP
 
     public static function verify($clientId, $input)
     {
+        $ip = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : null;
+        if ($ip && Security::ipRateLimited($ip)) {
+            Logger::log($clientId, 'rate_limited', $ip);
+            return ['success' => false, 'message' => 'Too many verification attempts from your network. Please try again later.'];
+        }
+
         $row = \Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')

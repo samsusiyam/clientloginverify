@@ -19,20 +19,17 @@ use ClientLoginVerify\Session;
 use Illuminate\Database\Capsule\Manager as Capsule;
 
 if (!function_exists('clv_is_verify_page')) {
+    /**
+     * The OTP verification page is EXACTLY the module client-area page with
+     * m=clientloginverify and clvverify=1. We deliberately do NOT treat a bare
+     * ?clvverify=1 on any other client page as the verify page, otherwise the
+     * ClientAreaPage guard could be bypassed by appending that param elsewhere.
+     */
     function clv_is_verify_page()
     {
-        if (class_exists('WHMCS\\Session') && \WHMCS\Session::get('clv_on_verify_page') === true) {
-            return true;
-        }
-        if (isset($_SESSION['clv_on_verify_page'])) {
-            return true;
-        }
-        if (isset($_GET['clvverify'])) {
-            return true;
-        }
-        $q = [];
-        parse_str((string) ($_SERVER['QUERY_STRING'] ?? ''), $q);
-        return (($q['clvverify'] ?? '') === '1');
+        $m  = isset($_GET['m']) ? (string) $_GET['m'] : '';
+        $clv = isset($_GET['clvverify']) ? (string) $_GET['clvverify'] : '';
+        return ($m === 'clientloginverify' && $clv === '1');
     }
 }
 
@@ -89,11 +86,17 @@ add_hook('ClientLogin', 1, function ($vars) {
 });
 
 add_hook('ClientAreaPageLogin', 100, function ($vars) {
-    if (Security::setting('enableModule', 'on') !== 'on') {
-        return;
-    }
-    $clientId = Session::get('uid');
-    if ($clientId && Security::requires2FA($clientId) && Session::get('clv_2fa_passed') !== true) {
+    try {
+        if (Security::setting('enableModule', 'on') !== 'on') {
+            return;
+        }
+        $clientId = Session::get('uid');
+        if ($clientId && Security::requires2FA($clientId) && Session::get('clv_2fa_passed') !== true) {
+            redir('m=clientloginverify&clvverify=1', 'clientarea.php');
+            exit;
+        }
+    } catch (\Exception $e) {
+        // On any error, fail closed by sending the user to the verification page.
         redir('m=clientloginverify&clvverify=1', 'clientarea.php');
         exit;
     }
@@ -110,7 +113,6 @@ add_hook('ClientAreaPage', 100, function ($vars) {
             return;
         }
         if (clv_is_verify_page()) {
-            Session::delete('clv_on_verify_page');
             return;
         }
         if (Session::get('clv_2fa_passed') === true) {
@@ -157,7 +159,6 @@ add_hook('ClientLogout', 1, function ($vars) {
     }
     Session::delete('clv_2fa_passed');
     Session::delete('clv_pending_client');
-    Session::delete('clv_on_verify_page');
     Session::delete('clv_email_error');
     if (function_exists('session_regenerate_id')) {
         session_regenerate_id(true);

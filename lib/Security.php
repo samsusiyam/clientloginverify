@@ -82,7 +82,8 @@ class Security
             return ['ok' => false, 'message' => 'Maximum resend limit reached. Please wait for the code to expire.'];
         }
 
-        $elapsed = Time::timestamp() - strtotime($row->created_at);
+        $created = \DateTime::createFromFormat('Y-m-d H:i:s', $row->created_at, new \DateTimeZone('UTC'));
+        $elapsed = $created ? (Time::timestamp() - $created->getTimestamp()) : 0;
         if ($elapsed < $cooldown) {
             $wait = $cooldown - $elapsed;
             return ['ok' => false, 'message' => 'Please wait ' . $wait . ' seconds before requesting a new code.'];
@@ -91,49 +92,64 @@ class Security
         return ['ok' => true];
     }
 
+    /**
+     * Global per-IP throttle on verification failures to slow network-level
+     * OTP brute forcing beyond the per-client attempt limit.
+     */
+    public static function ipRateLimited($ip)
+    {
+        $window = 15; // minutes
+        $limit  = 50; // max failed verifications per IP per window
+        $cutoff = Time::dbFromTimestamp(Time::timestamp() - $window * 60);
+        $count  = \Capsule::table('mod_clientloginverify_logs')
+            ->where('event', 'failed')
+            ->where('ip', $ip)
+            ->where('created_at', '>', $cutoff)
+            ->count();
+        return $count >= $limit;
+    }
+
     public static function resend($clientId)
     {
-        $cooldown = (int) self::setting('resendCooldown', 60);
+        $cooldown   = (int) self::setting('resendCooldown', 60);
         $maxResends = (int) self::setting('maxResends', 3);
-        $length = (int) self::setting('otpLength', 6);
-        $expiry = (int) self::setting('otpExpiry', 5);
+        $length     = (int) self::setting('otpLength', 6);
+        $expiry     = (int) self::setting('otpExpiry', 5);
 
-        $row = \Capsule::table('mod_clientloginverify_codes')
+        $code = OTP::random($length);
+
+        // Atomic: a single UPDATE with all limit/cooldown conditions in the
+        // WHERE clause. Two concurrent resend requests cannot both succeed
+        // because the first one resets created_at, so the second fails the
+        // cooldown check. Uses UTC_TIMESTAMP() to stay consistent with the
+        // UTC-stored created_at column regardless of DB/PHP timezone.
+        $affected = \Capsule::table('mod_clientloginverify_codes')
             ->where('client_id', $clientId)
             ->whereNull('verified_at')
             ->where('resends', '<', $maxResends)
-            ->whereRaw('TIMESTAMPDIFF(SECOND, created_at, NOW()) >= ?', [$cooldown])
-            ->orderBy('created_at', 'desc')
-            ->first();
+            ->whereRaw('TIMESTAMPDIFF(SECOND, created_at, UTC_TIMESTAMP()) >= ?', [$cooldown])
+            ->update([
+                'otp_hash'   => password_hash($code, PASSWORD_DEFAULT),
+                'expires_at' => Time::dbExpires($expiry),
+                'created_at' => Time::dbNow(),
+                'attempts'   => 0,
+                'resends'    => \Capsule::raw('resends + 1'),
+            ]);
 
-        if (!$row) {
-            $checkRow = \Capsule::table('mod_clientloginverify_codes')
+        if (!$affected) {
+            $row = \Capsule::table('mod_clientloginverify_codes')
                 ->where('client_id', $clientId)
                 ->whereNull('verified_at')
                 ->orderBy('created_at', 'desc')
                 ->first();
-
-            if (!$checkRow) {
+            if (!$row) {
                 return ['ok' => false, 'message' => 'No active code to resend.'];
             }
-            if ((int) $checkRow->resends >= $maxResends) {
+            if ((int) $row->resends >= $maxResends) {
                 return ['ok' => false, 'message' => 'Maximum resend limit reached. Please wait for the code to expire.'];
             }
-            $elapsed = Time::timestamp() - strtotime($checkRow->created_at);
-            if ($elapsed < $cooldown) {
-                return ['ok' => false, 'message' => 'Please wait ' . ($cooldown - $elapsed) . ' seconds before requesting a new code.'];
-            }
-            return ['ok' => false, 'message' => 'Unable to resend code at this time.'];
+            return ['ok' => false, 'message' => 'Please wait a moment before requesting a new code.'];
         }
-
-        $code = OTP::random($length);
-        \Capsule::table('mod_clientloginverify_codes')->where('id', $row->id)->update([
-            'otp_hash'   => password_hash($code, PASSWORD_DEFAULT),
-            'expires_at' => Time::dbExpires($expiry),
-            'created_at' => Time::dbNow(),
-            'attempts'   => 0,
-            'resends'    => (int) $row->resends + 1,
-        ]);
 
         $emailSent = false;
         try {
@@ -143,6 +159,14 @@ class Security
         }
 
         if (!$emailSent) {
+            // Roll back the resend increment so a failed email does not consume
+            // a resend attempt.
+            \Capsule::table('mod_clientloginverify_codes')
+                ->where('client_id', $clientId)
+                ->whereNull('verified_at')
+                ->where('resends', '>', 0)
+                ->orderBy('created_at', 'desc')
+                ->decrement('resends');
             return ['ok' => false, 'message' => 'Failed to send verification email. Please try again later.'];
         }
 

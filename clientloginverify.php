@@ -25,7 +25,7 @@ function clientloginverify_config()
         'description' => 'Adds email-based two-factor authentication (2FA) on client login. A one-time PIN is emailed and client area access is blocked until verified.',
         'author'      => 'WHMCSModule Networks',
         'language'    => 'english',
-        'version'     => '2.0.0',
+        'version'     => '2.0.1',
         'fields'      => [
             'enableModule' => [
                 'FriendlyName' => 'Enable Module',
@@ -197,6 +197,13 @@ function clientloginverify_deactivate()
     ];
 }
 
+function clientloginverify_admin_permissions()
+{
+    return [
+        'Manage Client Login Verify',
+    ];
+}
+
 function clientloginverify_output($vars)
 {
     $modulelink = $vars['modulelink'];
@@ -365,67 +372,71 @@ function clientloginverify_clientarea($vars)
         return $base;
     }
 
-    if (!isset($_GET['clvverify']) || $_GET['clvverify'] !== '1') {
-        $base['vars']['normalview'] = true;
-        $base['vars']['lang']       = $lang;
-        Session::set('clv_on_verify_page', true);
-        return $base;
-    }
+    try {
+        if (!isset($_GET['clvverify']) || $_GET['clvverify'] !== '1') {
+            $base['vars']['normalview'] = true;
+            $base['vars']['lang']       = $lang;
+            return $base;
+        }
 
-    if (!Security::requires2FA($clientId)) {
-        redir('rp=/');
-    }
-
-    if (Session::get('clv_2fa_passed') === true) {
-        redir('rp=/');
-    }
-
-    if (!OTP::hasPending($clientId)) {
-        Session::delete('clv_on_verify_page');
-        redir('rp=/login', 'clientarea.php');
-        exit;
-    }
-
-    $otpLength = (int) Security::setting('otpLength', 6);
-
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clv_otp'])) {
-        check_token();
-        $otp = preg_replace('/\D/', '', $_POST['clv_otp']);
-        $result = OTP::verify($clientId, $otp);
-        if ($result['success']) {
-            Session::set('clv_2fa_passed', true);
-            Session::delete('clv_on_verify_page');
-            Logger::log($clientId, 'verified', $_SERVER['REMOTE_ADDR'] ?? null);
-            if (function_exists('session_regenerate_id')) {
-                session_regenerate_id(true);
-            }
+        if (!Security::requires2FA($clientId)) {
             redir('rp=/');
-        } else {
-            Logger::log($clientId, 'failed', $_SERVER['REMOTE_ADDR'] ?? null, $result['message']);
-            $base['vars']['error'] = $result['message'];
         }
-    }
 
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['action'] === 'resend') {
-        check_token();
-        $res = Security::resend($clientId);
-        if ($res['ok']) {
-            $base['vars']['info'] = $lang['code_resent'];
-        } else {
-            $base['vars']['error'] = $res['message'];
+        if (Session::get('clv_2fa_passed') === true) {
+            redir('rp=/');
         }
-    }
 
-    // Display email failure error from ClientLogin hook
-    $emailError = Session::get('clv_email_error');
-    if ($emailError) {
-        Session::delete('clv_email_error');
-        $base['vars']['error'] = $emailError;
-    }
+        if (!OTP::hasPending($clientId)) {
+            redir('rp=/login', 'clientarea.php');
+            exit;
+        }
 
-    $base['vars']['token']      = generate_token('plain');
-    $base['vars']['otp_length'] = $otpLength;
-    $base['vars']['lang']       = $lang;
+        $otpLength = (int) Security::setting('otpLength', 6);
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            if (!check_token()) {
+                exit;
+            }
+            if (isset($_POST['clv_otp'])) {
+                $otp    = preg_replace('/\D/', '', $_POST['clv_otp']);
+                $result = OTP::verify($clientId, $otp);
+                if ($result['success']) {
+                    Session::set('clv_2fa_passed', true);
+                    Logger::log($clientId, 'verified', $_SERVER['REMOTE_ADDR'] ?? null);
+                    if (function_exists('session_regenerate_id')) {
+                        session_regenerate_id(true);
+                    }
+                    redir('rp=/');
+                } else {
+                    Logger::log($clientId, 'failed', $_SERVER['REMOTE_ADDR'] ?? null, $result['message']);
+                    $base['vars']['error'] = $result['message'];
+                }
+            } elseif (isset($_GET['action']) && $_GET['action'] === 'resend') {
+                $res = Security::resend($clientId);
+                if ($res['ok']) {
+                    $base['vars']['info'] = $lang['code_resent'];
+                } else {
+                    $base['vars']['error'] = $res['message'];
+                }
+            }
+        }
+
+        // Display email failure error from ClientLogin hook
+        $emailError = Session::get('clv_email_error');
+        if ($emailError) {
+            Session::delete('clv_email_error');
+            $base['vars']['error'] = $emailError;
+        }
+
+        $base['vars']['token']      = generate_token('plain');
+        $base['vars']['otp_length'] = $otpLength;
+        $base['vars']['lang']       = $lang;
+    } catch (\Exception $e) {
+        $base['vars']['error'] = 'An unexpected error occurred. Please try again or contact support.';
+        $base['vars']['token'] = function_exists('generate_token') ? generate_token('plain') : '';
+        $base['vars']['lang']  = $lang;
+    }
 
     return $base;
 }
