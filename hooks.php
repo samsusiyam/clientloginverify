@@ -4,19 +4,25 @@
  * Registers ClientLogin (send OTP), ClientAreaPage (guard) and related hooks.
  */
 
-require_once __DIR__ . '/lib/Time.php';
-require_once __DIR__ . '/lib/OTP.php';
-require_once __DIR__ . '/lib/Mailer.php';
-require_once __DIR__ . '/lib/Logger.php';
-require_once __DIR__ . '/lib/Security.php';
-require_once __DIR__ . '/lib/Session.php';
-
 use ClientLoginVerify\OTP;
 use ClientLoginVerify\Mailer;
 use ClientLoginVerify\Logger;
 use ClientLoginVerify\Security;
 use ClientLoginVerify\Session;
 use Illuminate\Database\Capsule\Manager as Capsule;
+
+if (!defined('WHMCS')) {
+    die('This file cannot be accessed directly.');
+}
+
+// Guarded loader: never fatal the hooks bootstrap if a lib file is missing.
+foreach (['Time', 'OTP', 'Mailer', 'Logger', 'Security', 'Session'] as $clvLib) {
+    $clvLibFile = __DIR__ . '/lib/' . $clvLib . '.php';
+    if (is_file($clvLibFile)) {
+        require_once $clvLibFile;
+    }
+}
+unset($clvLib, $clvLibFile);
 
 if (!function_exists('clv_is_verify_page')) {
     /**

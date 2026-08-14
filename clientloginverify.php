@@ -4,13 +4,6 @@
  * Email-based two-factor authentication (2FA) for WHMCS client logins.
  */
 
-require_once __DIR__ . '/lib/Time.php';
-require_once __DIR__ . '/lib/OTP.php';
-require_once __DIR__ . '/lib/Mailer.php';
-require_once __DIR__ . '/lib/Logger.php';
-require_once __DIR__ . '/lib/Security.php';
-require_once __DIR__ . '/lib/Session.php';
-
 use ClientLoginVerify\OTP;
 use ClientLoginVerify\Mailer;
 use ClientLoginVerify\Logger;
@@ -19,9 +12,32 @@ use ClientLoginVerify\Session;
 use ClientLoginVerify\Time;
 use Illuminate\Database\Capsule\Manager as Capsule;
 
+if (!defined('WHMCS')) {
+    die('This file cannot be accessed directly.');
+}
+
+/**
+ * Guarded library loader.
+ *
+ * We deliberately avoid bare `require_once` at file scope. If a lib file were
+ * missing or unreadable on the server, a hard require would fatal the whole
+ * module BEFORE clientloginverify_config() is defined, causing WHMCS to render
+ * "No description available" / "Unknown" developer in the admin area. Loading
+ * each file only when present keeps the module metadata resolvable and turns a
+ * missing dependency into a controlled activation error instead of a fatal.
+ */
+foreach (['Time', 'OTP', 'Mailer', 'Logger', 'Security', 'Session'] as $clvLib) {
+    $clvLibFile = __DIR__ . '/lib/' . $clvLib . '.php';
+    if (is_file($clvLibFile)) {
+        require_once $clvLibFile;
+    }
+}
+unset($clvLib, $clvLibFile);
+
 function clientloginverify_config()
 {
     return [
+        'name'        => 'Client Login Verify',
         'description' => 'Email-based two-factor authentication (2FA) for WHMCS client logins. After a successful password login, a one-time verification code is emailed to the client and all client-area pages stay locked until the code is entered — protecting accounts from password theft and unauthorized access.',
         'author'      => 'Host Nibo',
         'language'    => 'english',
