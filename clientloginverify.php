@@ -591,12 +591,13 @@ function clientloginverify_clientarea($vars)
         // Not on the dedicated verify page: nothing to render here.
         if (!CLV::isVerifyPage()) {
             $base['vars']['normalview'] = true;
+            $base['vars']['logout_url'] = CLV::systemUrl('clientarea.php');
             return $base;
         }
 
         // Already verified, or 2FA not required for this client: let them in.
         if (!CLV::requires2FA($clientId) || CLV::sessionGet('clv_passed') === true) {
-            CLV::redirect('clientarea.php');
+            CLV::redirect(CLV::systemUrl('clientarea.php'));
         }
 
         // Ensure there is always a live code so the form can render. If none is
@@ -629,7 +630,7 @@ function clientloginverify_clientarea($vars)
                     if (function_exists('session_regenerate_id')) {
                         @session_regenerate_id(true);
                     }
-                    CLV::redirect('clientarea.php');
+                    CLV::redirect(CLV::systemUrl('clientarea.php'));
                 }
                 $base['vars']['error'] = $res['message'];
             }
@@ -646,9 +647,15 @@ function clientloginverify_clientarea($vars)
 
         $base['vars']['token']      = function_exists('generate_token') ? generate_token('plain') : '';
         $base['vars']['otp_length'] = $otpLength;
+        $base['vars']['verify_url'] = CLV::verifyUrl();
+        $base['vars']['resend_url'] = CLV::verifyUrl() . '&action=resend';
+        $base['vars']['logout_url'] = CLV::systemUrl('logout.php');
     } catch (\Exception $e) {
         $base['vars']['error'] = 'An unexpected error occurred. Please try again or contact support.';
         $base['vars']['token'] = function_exists('generate_token') ? generate_token('plain') : '';
+        $base['vars']['verify_url'] = CLV::verifyUrl();
+        $base['vars']['resend_url'] = CLV::verifyUrl() . '&action=resend';
+        $base['vars']['logout_url'] = CLV::systemUrl('logout.php');
     }
 
     return $base;

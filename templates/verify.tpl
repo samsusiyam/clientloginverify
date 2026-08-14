@@ -4,7 +4,7 @@
             <div class="clv-icon">&#9989;</div>
             <h2 class="clv-title">{$lang.title}</h2>
             <p class="clv-text">{$lang.normal_active}</p>
-            <a href="clientarea.php" class="clv-btn">{$lang.continue}</a>
+            <a href="{$logout_url|default:'clientarea.php'}" class="clv-btn">{$lang.continue}</a>
         {else}
             <div class="clv-icon">&#128274;</div>
             <h2 class="clv-title">{$lang.title}</h2>
@@ -17,7 +17,7 @@
                 <div class="clv-alert clv-alert-info">{$info}</div>
             {/if}
 
-            <form method="post" action="index.php?m=clientloginverify&clvverify=1" class="clv-form" autocomplete="off">
+            <form method="post" action="{$verify_url}" class="clv-form" autocomplete="off">
                 <input type="hidden" name="token" value="{$token}">
                 <label for="clv_code" class="clv-label">{$lang.code_label}</label>
                 <input type="text"
@@ -34,12 +34,12 @@
                 <button type="submit" class="clv-btn">{$lang.submit}</button>
             </form>
 
-            <form method="post" action="index.php?m=clientloginverify&clvverify=1&action=resend" class="clv-resend-form">
+            <form method="post" action="{$resend_url}" class="clv-resend-form">
                 <input type="hidden" name="token" value="{$token}">
                 <button type="submit" class="clv-resend-btn">{$lang.resend}</button>
             </form>
 
-            <p class="clv-logout"><a href="logout.php">{$lang.cancel}</a></p>
+            <p class="clv-logout"><a href="{$logout_url|default:'logout.php'}">{$lang.cancel}</a></p>
         {/if}
     </div>
 </div>

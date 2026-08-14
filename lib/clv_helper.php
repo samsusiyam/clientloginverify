@@ -345,18 +345,55 @@ class CLV
 
     public static function verifyUrl()
     {
-        // Addon module client-area pages are served by index.php?m=<module>,
-        // NOT clientarea.php. Using clientarea.php makes WHMCS ignore the m=
-        // parameter and render the normal dashboard, so no verify page shows.
-        return 'index.php?m=' . self::MODULE . '&clvverify=1';
+        // Addon module client-area pages are served by index.php?m=<module>.
+        // Return an absolute URL so redirects are never resolved relative to a
+        // routed path such as /index.php/... (which would 404).
+        return self::systemUrl('index.php?m=' . self::MODULE . '&clvverify=1');
+    }
+
+    /**
+     * Build an absolute front-end URL from the WHMCS SystemURL. Falls back to a
+     * root-relative path so the browser resolves it against the domain root
+     * (never against the current routed path).
+     */
+    public static function systemUrl($path)
+    {
+        $path = ltrim((string) $path, '/');
+        $base = '';
+
+        try {
+            $base = (string) \WHMCS\Database\Capsule::table('tblconfiguration')
+                ->where('setting', 'SystemURL')
+                ->value('value');
+        } catch (\Throwable $e) {
+            $base = '';
+        }
+
+        if ($base === '' && isset($_SERVER['HTTP_HOST'])) {
+            $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+            $base   = ($secure ? 'https' : 'http') . '://' . $_SERVER['HTTP_HOST'];
+        }
+
+        if ($base === '') {
+            // Last resort: root-relative so it is at least resolved from the
+            // domain root rather than the current routed path.
+            return '/' . $path;
+        }
+
+        return rtrim($base, '/') . '/' . $path;
     }
 
     /**
      * Plain header redirect. Avoids depending on the signature of the WHMCS
-     * redir() helper, which differs between versions.
+     * redir() helper, which differs between versions. Relative paths are made
+     * absolute against the SystemURL first so they cannot 404 when the current
+     * request was served through a routed path like /index.php/...
      */
     public static function redirect($url)
     {
+        if (strpos($url, 'http://') !== 0 && strpos($url, 'https://') !== 0) {
+            $url = self::systemUrl($url);
+        }
         if (!headers_sent()) {
             header('Location: ' . $url);
         } else {
