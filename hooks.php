@@ -54,6 +54,9 @@ add_hook('ClientLogin', 1, function ($vars) {
 
         CLV::sessionSet('clv_passed', false);
         CLV::sessionSet('clv_pending_client', $clientId);
+        // Bind the (not yet granted) pass to this specific client so a stale
+        // flag from a previous session or account can never satisfy the guard.
+        CLV::sessionSet('clv_passed_uid', 0);
 
         $code = CLV::issueCode($clientId, $userId);
 
@@ -92,7 +95,7 @@ add_hook('ClientAreaPage', 1, function ($vars) {
         if (CLV::isVerifyPage()) {
             return;
         }
-        if (CLV::sessionGet('clv_passed') === true) {
+        if (CLV::passedFor($clientId)) {
             return;
         }
         if (!CLV::requires2FA($clientId)) {
@@ -125,6 +128,7 @@ add_hook('ClientLogout', 1, function ($vars) {
     }
 
     CLV::sessionForget('clv_passed');
+    CLV::sessionForget('clv_passed_uid');
     CLV::sessionForget('clv_pending_client');
     CLV::sessionForget('clv_email_error');
 

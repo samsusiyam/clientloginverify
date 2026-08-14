@@ -331,6 +331,25 @@ class CLV
     }
 
     /**
+     * Mark 2FA as passed for the current session, bound to a specific client id
+     * so a leftover flag can never satisfy the guard for a different account.
+     */
+    public static function markPassed($clientId)
+    {
+        self::sessionSet('clv_passed', true);
+        self::sessionSet('clv_passed_uid', (int) $clientId);
+    }
+
+    /**
+     * True only if 2FA was passed in this session for exactly this client id.
+     */
+    public static function passedFor($clientId)
+    {
+        return (self::sessionGet('clv_passed') === true
+            && (int) self::sessionGet('clv_passed_uid') === (int) $clientId);
+    }
+
+    /**
      * True only on the dedicated verification page. Both parameters are
      * required: a bare ?clvverify=1 on any other page must NOT be treated as
      * the verify page, otherwise the client area guard could be bypassed by

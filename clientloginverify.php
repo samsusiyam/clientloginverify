@@ -596,7 +596,7 @@ function clientloginverify_clientarea($vars)
         }
 
         // Already verified, or 2FA not required for this client: let them in.
-        if (!CLV::requires2FA($clientId) || CLV::sessionGet('clv_passed') === true) {
+        if (!CLV::requires2FA($clientId) || CLV::passedFor($clientId)) {
             CLV::redirect(CLV::systemUrl('clientarea.php'));
         }
 
@@ -626,7 +626,7 @@ function clientloginverify_clientarea($vars)
             } elseif (isset($_POST['clv_code'])) {
                 $res = CLV::verifyCode($clientId, $_POST['clv_code']);
                 if ($res['success']) {
-                    CLV::sessionSet('clv_passed', true);
+                    CLV::markPassed($clientId);
                     if (function_exists('session_regenerate_id')) {
                         @session_regenerate_id(true);
                     }
