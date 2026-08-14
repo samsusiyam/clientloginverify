@@ -135,6 +135,12 @@ class CLV
                 'default' => '',
                 'desc'    => 'Comma separated client group IDs that skip 2FA (e.g. 1,3).',
             ),
+            'debugMode' => array(
+                'label'   => 'Debug Mode',
+                'type'    => 'yesno',
+                'default' => '',
+                'desc'    => 'Log detailed email delivery diagnostics to the Logs tab and the WHMCS Activity Log. Turn on only while troubleshooting.',
+            ),
         );
     }
 
@@ -725,34 +731,136 @@ class CLV
             'clv_os'       => self::os($agent),
         );
 
+        $template = self::templateName();
+        self::debug($clientId, 'sendCode: start template="' . $template . '"');
+
         try {
             if (function_exists('localAPI')) {
-                $response = localAPI('SendEmail', array(
-                    'messagename' => self::templateName(),
+                $params = array(
+                    'messagename' => $template,
                     'id'          => $clientId,
-                    'customtype'  => 'general',
-                    'custommessage' => '',
                     'customvars'  => base64_encode(serialize($merge)),
-                ));
+                );
+                $response = localAPI('SendEmail', $params);
+
+                self::debug($clientId, 'SendEmail response: ' . json_encode($response));
+
                 if (isset($response['result']) && $response['result'] === 'success') {
                     return true;
                 }
+
                 $error = isset($response['message']) ? $response['message'] : 'unknown error';
                 self::log($clientId, 'email_failed', 'SendEmail API: ' . $error);
+
+                // Fall back to the lower level mail sender before giving up.
+                if (function_exists('sendMessage')) {
+                    self::debug($clientId, 'Falling back to sendMessage()');
+                    sendMessage($template, $clientId, $merge);
+                    return true;
+                }
                 return false;
             }
 
             if (function_exists('sendMessage')) {
-                sendMessage(self::templateName(), $clientId, $merge);
+                self::debug($clientId, 'localAPI unavailable, using sendMessage()');
+                sendMessage($template, $clientId, $merge);
                 return true;
             }
         } catch (\Exception $e) {
             self::log($clientId, 'email_failed', 'Exception: ' . $e->getMessage());
+            self::debug($clientId, 'sendCode exception: ' . $e->getMessage());
             return false;
         }
 
         self::log($clientId, 'email_failed', 'No WHMCS mail function available');
         return false;
+    }
+
+    /**
+     * Debug logging. Only records when the debugMode setting is on. Writes to
+     * both the module log table and the WHMCS activity log so the exact
+     * SendEmail response can be inspected while troubleshooting.
+     */
+    public static function debug($clientId, $message)
+    {
+        if (self::setting('debugMode') !== 'on') {
+            return;
+        }
+        try {
+            \WHMCS\Database\Capsule::table(self::T_LOGS)->insert(array(
+                'client_id'  => (int) $clientId,
+                'event'      => 'debug',
+                'ip'         => self::ip(),
+                'user_agent' => self::userAgent(),
+                'message'    => substr((string) $message, 0, 500),
+                'created_at' => self::dbNow(),
+            ));
+        } catch (\Exception $e) {
+            // ignore
+        }
+        if (function_exists('logActivity')) {
+            logActivity('[ClientLoginVerify] client#' . (int) $clientId . ' ' . $message);
+        }
+    }
+
+    /**
+     * Send a code and return a rich diagnostic array for the admin test tool.
+     *
+     * @return array array('ok' => bool, 'message' => string)
+     */
+    public static function sendCodeDiagnostic($clientId, $code)
+    {
+        $clientId = (int) $clientId;
+        if ($clientId <= 0) {
+            return array('ok' => false, 'message' => 'Enter a valid client ID.');
+        }
+
+        try {
+            $client = \WHMCS\Database\Capsule::table('tblclients')->where('id', $clientId)->first();
+        } catch (\Exception $e) {
+            return array('ok' => false, 'message' => 'Database error: ' . $e->getMessage());
+        }
+        if (!$client) {
+            return array('ok' => false, 'message' => 'No client found with ID ' . $clientId . '.');
+        }
+
+        $template = self::templateName();
+        try {
+            $exists = \WHMCS\Database\Capsule::table('tblemailtemplates')
+                ->where('name', $template)
+                ->exists();
+        } catch (\Exception $e) {
+            $exists = false;
+        }
+        if (!$exists) {
+            return array('ok' => false, 'message' => 'Email template "' . $template . '" was not found. Deactivate and reactivate the module to recreate it, or set the correct template name in settings.');
+        }
+
+        if (!function_exists('localAPI')) {
+            return array('ok' => false, 'message' => 'WHMCS localAPI() is not available in this context.');
+        }
+
+        $merge = array(
+            'clv_code'     => $code,
+            'clv_expiry'   => (int) self::setting('otpExpiry'),
+            'clv_datetime' => self::displayNow(),
+            'clv_ip'       => self::ip(),
+            'clv_browser'  => 'Test',
+            'clv_os'       => 'Test',
+        );
+
+        $response = localAPI('SendEmail', array(
+            'messagename' => $template,
+            'id'          => $clientId,
+            'customvars'  => base64_encode(serialize($merge)),
+        ));
+
+        if (isset($response['result']) && $response['result'] === 'success') {
+            return array('ok' => true, 'message' => 'sent');
+        }
+
+        $msg = isset($response['message']) ? $response['message'] : 'unknown error';
+        return array('ok' => false, 'message' => $msg);
     }
 
     public static function browser($agent)

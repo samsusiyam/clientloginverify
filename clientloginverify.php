@@ -211,10 +211,11 @@ function clientloginverify_output($vars)
             $view   = 'settings';
         } elseif ($action === 'testemail' && $_SERVER['REQUEST_METHOD'] === 'POST' && $tokenOk) {
             $cid = isset($_POST['test_client']) ? (int) $_POST['test_client'] : 0;
-            if ($cid > 0 && CLV::sendCode($cid, CLV::randomCode((int) CLV::setting('otpLength')))) {
-                $notice = 'Test email sent to client #' . $cid . '. Check the inbox and the mail log.';
+            $diag = CLV::sendCodeDiagnostic($cid, CLV::randomCode((int) CLV::setting('otpLength')));
+            if ($diag['ok']) {
+                $notice = 'Test email sent to client #' . $cid . '. Check the inbox and the WHMCS mail log (Utilities > Logs > Email Message Log).';
             } else {
-                $notice     = 'Test email could not be sent. Check the client ID and your WHMCS mail settings.';
+                $notice     = 'Test email failed: ' . $diag['message'];
                 $noticeType = 'error';
             }
             $view = 'settings';
