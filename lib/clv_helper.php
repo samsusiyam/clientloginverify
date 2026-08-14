@@ -711,7 +711,19 @@ class CLV
     }
 
     /**
-     * Send the code using the WHMCS email system.
+     * Send the code through the WHMCS native mail system.
+     *
+     * Uses WHMCS's own email abstraction only (localAPI SendEmail), so whatever
+     * mail provider WHMCS is configured with - SMTP, Brevo API module, etc. -
+     * is used automatically. The module never talks to a mail provider directly.
+     *
+     * Two native paths are attempted, both through WHMCS:
+     *   1. Stored template by name (messagename).
+     *   2. Inline general message (customtype=general + custommessage) as a
+     *      fallback, because some WHMCS builds throw
+     *      "Class WHMCS\Mail\Entity\Client not found" from factoryByTemplate()
+     *      when sending a stored template to a client. The inline path avoids
+     *      that entity resolution while still using WHMCS's configured provider.
      *
      * Merge field names are prefixed with clv_ so they cannot collide with
      * WHMCS built-in merge fields such as {$ip} or {$code}.
@@ -731,49 +743,73 @@ class CLV
             'clv_os'       => self::os($agent),
         );
 
-        $template = self::templateName();
-        self::debug($clientId, 'sendCode: start template="' . $template . '"');
-
-        try {
-            if (function_exists('localAPI')) {
-                $params = array(
-                    'messagename' => $template,
-                    'id'          => $clientId,
-                    'customvars'  => base64_encode(serialize($merge)),
-                );
-                $response = localAPI('SendEmail', $params);
-
-                self::debug($clientId, 'SendEmail response: ' . json_encode($response));
-
-                if (isset($response['result']) && $response['result'] === 'success') {
-                    return true;
-                }
-
-                $error = isset($response['message']) ? $response['message'] : 'unknown error';
-                self::log($clientId, 'email_failed', 'SendEmail API: ' . $error);
-
-                // Fall back to the lower level mail sender before giving up.
-                if (function_exists('sendMessage')) {
-                    self::debug($clientId, 'Falling back to sendMessage()');
-                    sendMessage($template, $clientId, $merge);
-                    return true;
-                }
-                return false;
-            }
-
-            if (function_exists('sendMessage')) {
-                self::debug($clientId, 'localAPI unavailable, using sendMessage()');
-                sendMessage($template, $clientId, $merge);
-                return true;
-            }
-        } catch (\Exception $e) {
-            self::log($clientId, 'email_failed', 'Exception: ' . $e->getMessage());
-            self::debug($clientId, 'sendCode exception: ' . $e->getMessage());
+        if (!function_exists('localAPI')) {
+            self::log($clientId, 'email_failed', 'WHMCS localAPI() unavailable');
             return false;
         }
 
-        self::log($clientId, 'email_failed', 'No WHMCS mail function available');
+        $template = self::templateName();
+        self::debug($clientId, 'sendCode start, template="' . $template . '"');
+
+        // ---- Path 1: stored template by name -------------------------------
+        try {
+            $response = localAPI('SendEmail', array(
+                'messagename' => $template,
+                'id'          => $clientId,
+                'customvars'  => base64_encode(serialize($merge)),
+            ));
+            self::debug($clientId, 'template send response: ' . json_encode($response));
+            if (isset($response['result']) && $response['result'] === 'success') {
+                return true;
+            }
+            $err = isset($response['message']) ? $response['message'] : 'unknown error';
+            self::log($clientId, 'email_failed', 'Template send: ' . $err);
+        } catch (\Throwable $e) {
+            // Catch Error too (e.g. missing WHMCS\Mail\Entity\Client class).
+            self::debug($clientId, 'template send threw: ' . $e->getMessage());
+            self::log($clientId, 'email_failed', 'Template send exception: ' . $e->getMessage());
+        }
+
+        // ---- Path 2: native inline general message -------------------------
+        try {
+            $response = localAPI('SendEmail', array(
+                'customtype'    => 'general',
+                'customsubject' => 'Your login verification code',
+                'custommessage' => self::inlineEmailBody(),
+                'id'            => $clientId,
+                'customvars'    => base64_encode(serialize($merge)),
+            ));
+            self::debug($clientId, 'inline send response: ' . json_encode($response));
+            if (isset($response['result']) && $response['result'] === 'success') {
+                return true;
+            }
+            $err = isset($response['message']) ? $response['message'] : 'unknown error';
+            self::log($clientId, 'email_failed', 'Inline send: ' . $err);
+        } catch (\Throwable $e) {
+            self::debug($clientId, 'inline send threw: ' . $e->getMessage());
+            self::log($clientId, 'email_failed', 'Inline send exception: ' . $e->getMessage());
+        }
+
         return false;
+    }
+
+    /**
+     * Inline HTML body used by the native fallback send. Mirrors the stored
+     * template so the client gets the same email either way.
+     */
+    public static function inlineEmailBody()
+    {
+        return '<p>Hello {$client_name},</p>'
+            . '<p>A login to your account was requested. Use the verification code below to continue:</p>'
+            . '<p style="font-size:26px;font-weight:bold;letter-spacing:4px;">{$clv_code}</p>'
+            . '<p>This code expires in {$clv_expiry} minutes.</p>'
+            . '<p><strong>Request details</strong><br>'
+            . 'Time: {$clv_datetime}<br>'
+            . 'IP address: {$clv_ip}<br>'
+            . 'Browser: {$clv_browser}<br>'
+            . 'Operating system: {$clv_os}</p>'
+            . '<p>If you did not try to log in, please change your password immediately.</p>'
+            . '<p>Regards,<br>{$company_name}</p>';
     }
 
     /**
@@ -840,27 +876,24 @@ class CLV
             return array('ok' => false, 'message' => 'WHMCS localAPI() is not available in this context.');
         }
 
-        $merge = array(
-            'clv_code'     => $code,
-            'clv_expiry'   => (int) self::setting('otpExpiry'),
-            'clv_datetime' => self::displayNow(),
-            'clv_ip'       => self::ip(),
-            'clv_browser'  => 'Test',
-            'clv_os'       => 'Test',
-        );
-
-        $response = localAPI('SendEmail', array(
-            'messagename' => $template,
-            'id'          => $clientId,
-            'customvars'  => base64_encode(serialize($merge)),
-        ));
-
-        if (isset($response['result']) && $response['result'] === 'success') {
+        // Reuse the same native two-path sender used at login so the test
+        // exercises the real code path (including the inline fallback that
+        // works around the WHMCS\Mail\Entity\Client factory error).
+        if (self::sendCode($clientId, $code)) {
             return array('ok' => true, 'message' => 'sent');
         }
 
-        $msg = isset($response['message']) ? $response['message'] : 'unknown error';
-        return array('ok' => false, 'message' => $msg);
+        // Surface the most recent failure reason from the log for context.
+        try {
+            $last = \WHMCS\Database\Capsule::table(self::T_LOGS)
+                ->where('client_id', $clientId)
+                ->where('event', 'email_failed')
+                ->orderBy('id', 'desc')
+                ->value('message');
+        } catch (\Exception $e) {
+            $last = '';
+        }
+        return array('ok' => false, 'message' => $last ? $last : 'Email could not be sent. Enable Debug Mode and check the Logs tab.');
     }
 
     public static function browser($agent)
