@@ -44,7 +44,7 @@
     </div>
 </div>
 
-<style>
+<style>{literal}
 .clv-verify{display:flex;justify-content:center;align-items:flex-start;padding:40px 15px;}
 .clv-card{background:#fff;border:1px solid #e3e8ee;border-radius:12px;box-shadow:0 6px 28px rgba(20,40,80,.08);max-width:420px;width:100%;padding:34px 30px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
 .clv-icon{font-size:44px;line-height:1;margin-bottom:6px;}
@@ -64,9 +64,9 @@
 .clv-logout{margin:14px 0 0;}
 .clv-logout a{color:#8a97a8;font-size:12px;text-decoration:none;}
 .clv-logout a:hover{text-decoration:underline;}
-</style>
+{/literal}</style>
 
-<script>
+<script>{literal}
 (function(){
     var input=document.getElementById('clv_code');
     if(!input){return;}
@@ -83,4 +83,4 @@
         }
     });
 })();
-</script>
+{/literal}</script>
