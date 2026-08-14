@@ -1,427 +1,368 @@
 <?php
 /**
- * Client Login Verify - Addon Module
- * Email-based two-factor authentication (2FA) for WHMCS client logins.
+ * Client Login Verify
+ *
+ * Email based two factor authentication (2FA) for WHMCS client logins.
+ * After a correct password, a one time code is emailed to the client and every
+ * client area page stays locked until the code is entered.
+ *
+ * @package    ClientLoginVerify
+ * @author     Host Nibo
+ * @version    3.0
+ *
+ * Implementation rules (kept intentionally simple, see lib/clv_helper.php):
+ *   - No namespace, no `use ... as Capsule` alias anywhere.
+ *   - All Eloquent access via fully qualified \WHMCS\Database\Capsule::.
+ *   - Activation uses WHMCS native DB functions because Capsule is not loaded
+ *     at that stage.
+ *   - PHP 7.2 compatible syntax throughout.
  */
-
-use ClientLoginVerify\OTP;
-use ClientLoginVerify\Mailer;
-use ClientLoginVerify\Logger;
-use ClientLoginVerify\Security;
-use ClientLoginVerify\Session;
-use ClientLoginVerify\Time;
 
 if (!defined('WHMCS')) {
     die('This file cannot be accessed directly.');
 }
 
-/**
- * Guarded library loader.
- *
- * We deliberately avoid bare `require_once` at file scope. If a lib file were
- * missing or unreadable on the server, a hard require would fatal the whole
- * module BEFORE clientloginverify_config() is defined, causing WHMCS to render
- * "No description available" / "Unknown" developer in the admin area. Loading
- * each file only when present keeps the module metadata resolvable and turns a
- * missing dependency into a controlled activation error instead of a fatal.
- */
-foreach (['Time', 'OTP', 'Mailer', 'Logger', 'Security', 'Session'] as $clvLib) {
-    $clvLibFile = __DIR__ . '/lib/' . $clvLib . '.php';
-    if (is_file($clvLibFile)) {
-        require_once $clvLibFile;
-    }
-}
-unset($clvLib, $clvLibFile);
+require_once __DIR__ . '/lib/clv_helper.php';
 
+/**
+ * Module metadata shown in the WHMCS admin area. Defining `name`, `author` and
+ * `description` here (and never fataling before this function is defined) is
+ * what prevents the "No description available / Unknown developer" display.
+ */
 function clientloginverify_config()
 {
-    return [
+    $config = array(
         'name'        => 'Client Login Verify',
-        'description' => 'Email-based two-factor authentication (2FA) for WHMCS client logins. After a successful password login, a one-time verification code is emailed to the client and all client-area pages stay locked until the code is entered — protecting accounts from password theft and unauthorized access.',
+        'description' => 'Email based two factor authentication (2FA) for WHMCS client logins. After a successful password login a one time verification code is emailed to the client and every client area page stays locked until the code is entered, protecting accounts from password theft.',
         'author'      => 'Host Nibo',
         'language'    => 'english',
-        'version'     => '1.0',
-        'fields'      => [
-            'enableModule' => [
-                'FriendlyName' => 'Enable Module',
-                'Type'         => 'yesno',
-                'Description'  => 'Enable email 2FA for client logins',
-                'Default'      => 'on',
-            ],
-            'forceVerification' => [
-                'FriendlyName' => 'Force Verification',
-                'Type'         => 'yesno',
-                'Description'  => 'Require 2FA for every client login',
-                'Default'      => 'on',
-            ],
-            'otpLength' => [
-                'FriendlyName' => 'OTP Length',
-                'Type'         => 'text',
-                'Size'         => '5',
-                'Default'      => '6',
-                'Description'  => 'Number of digits in the OTP',
-            ],
-            'otpExpiry' => [
-                'FriendlyName' => 'OTP Expiry (minutes)',
-                'Type'         => 'text',
-                'Size'         => '5',
-                'Default'      => '5',
-                'Description'  => 'How long the OTP remains valid',
-            ],
-            'maxAttempts' => [
-                'FriendlyName' => 'Maximum Attempts',
-                'Type'         => 'text',
-                'Size'         => '5',
-                'Default'      => '5',
-                'Description'  => 'Max incorrect entries before lockout',
-            ],
-            'resendCooldown' => [
-                'FriendlyName' => 'Resend Cooldown (seconds)',
-                'Type'         => 'text',
-                'Size'         => '5',
-                'Default'      => '60',
-            ],
-            'maxResends' => [
-                'FriendlyName' => 'Maximum Resends',
-                'Type'         => 'text',
-                'Size'         => '5',
-                'Default'      => '3',
-            ],
-            'emailTemplate' => [
-                'FriendlyName' => 'Email Template',
-                'Type'         => 'text',
-                'Size'         => '30',
-                'Default'      => 'Client Login Verification',
-                'Description'  => 'Name of the WHMCS client email template',
-            ],
-            'logAttempts' => [
-                'FriendlyName' => 'Log Attempts',
-                'Type'         => 'yesno',
-                'Default'      => 'on',
-            ],
-            'logIp' => [
-                'FriendlyName' => 'Log IP Address',
-                'Type'         => 'yesno',
-                'Default'      => 'on',
-            ],
-            'excludedGroups' => [
-                'FriendlyName' => 'Excluded Client Groups',
-                'Type'         => 'text',
-                'Size'         => '30',
-                'Description'  => 'Comma separated client group IDs to skip 2FA',
-            ],
-        ],
-    ];
+        'version'     => '3.0',
+        'fields'      => array(),
+    );
+
+    foreach (CLV::fields() as $key => $field) {
+        $entry = array(
+            'FriendlyName' => $field['label'],
+            'Type'         => ($field['type'] === 'yesno') ? 'yesno' : 'text',
+            'Description'  => isset($field['desc']) ? $field['desc'] : '',
+        );
+        if ($field['type'] !== 'yesno') {
+            $entry['Size']    = '30';
+            $entry['Default'] = $field['default'];
+        } else {
+            $entry['Default'] = $field['default'];
+        }
+        $config['fields'][$key] = $entry;
+    }
+
+    return $config;
 }
 
+/**
+ * Create the database tables and the email template. Uses WHMCS native DB
+ * functions because Capsule is not guaranteed to be available during activate.
+ */
 function clientloginverify_activate()
 {
     try {
-        // Use WHMCS database functions (always available during activation)
-        $tables = [
-            'mod_clientloginverify_codes' => "
-                CREATE TABLE IF NOT EXISTS `mod_clientloginverify_codes` (
-                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-                    `user_id` int(10) unsigned DEFAULT NULL,
-                    `client_id` int(10) unsigned NOT NULL,
-                    `otp_hash` varchar(255) NOT NULL,
-                    `expires_at` datetime NOT NULL,
-                    `attempts` int(10) unsigned NOT NULL DEFAULT '0',
-                    `max_attempts` int(10) unsigned NOT NULL DEFAULT '5',
-                    `resends` int(10) unsigned NOT NULL DEFAULT '0',
-                    `ip_address` varchar(45) DEFAULT NULL,
-                    `user_agent` text DEFAULT NULL,
-                    `verified_at` datetime DEFAULT NULL,
-                    `created_at` datetime DEFAULT NULL,
-                    PRIMARY KEY (`id`),
-                    KEY `client_id` (`client_id`)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            ",
-            'mod_clientloginverify_logs' => "
-                CREATE TABLE IF NOT EXISTS `mod_clientloginverify_logs` (
-                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-                    `client_id` int(10) unsigned DEFAULT NULL,
-                    `event` varchar(50) NOT NULL,
-                    `ip` varchar(45) DEFAULT NULL,
-                    `user_agent` text DEFAULT NULL,
-                    `message` text DEFAULT NULL,
-                    `created_at` datetime DEFAULT NULL,
-                    PRIMARY KEY (`id`),
-                    KEY `client_id` (`client_id`)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            ",
-            'mod_clientloginverify_settings' => "
-                CREATE TABLE IF NOT EXISTS `mod_clientloginverify_settings` (
-                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-                    `client_id` int(10) unsigned NOT NULL,
-                    `setting` varchar(50) NOT NULL,
-                    `value` text DEFAULT NULL,
-                    `created_at` datetime DEFAULT NULL,
-                    PRIMARY KEY (`id`),
-                    UNIQUE KEY `client_setting` (`client_id`, `setting`)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            ",
-        ];
+        $tables = array(
+            "CREATE TABLE IF NOT EXISTS `mod_clientloginverify_codes` (
+                `id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+                `user_id` INT(10) UNSIGNED DEFAULT NULL,
+                `client_id` INT(10) UNSIGNED NOT NULL,
+                `otp_hash` VARCHAR(255) NOT NULL,
+                `expires_at` DATETIME NOT NULL,
+                `attempts` INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                `max_attempts` INT(10) UNSIGNED NOT NULL DEFAULT 5,
+                `resends` INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                `ip_address` VARCHAR(45) DEFAULT NULL,
+                `user_agent` VARCHAR(500) DEFAULT NULL,
+                `verified_at` DATETIME DEFAULT NULL,
+                `created_at` DATETIME DEFAULT NULL,
+                PRIMARY KEY (`id`),
+                KEY `client_pending` (`client_id`, `verified_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
 
-        foreach ($tables as $table => $sql) {
+            "CREATE TABLE IF NOT EXISTS `mod_clientloginverify_logs` (
+                `id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+                `client_id` INT(10) UNSIGNED DEFAULT NULL,
+                `event` VARCHAR(50) NOT NULL,
+                `ip` VARCHAR(45) DEFAULT NULL,
+                `user_agent` VARCHAR(500) DEFAULT NULL,
+                `message` VARCHAR(500) DEFAULT NULL,
+                `created_at` DATETIME DEFAULT NULL,
+                PRIMARY KEY (`id`),
+                KEY `client_id` (`client_id`),
+                KEY `ip_time` (`ip`, `created_at`),
+                KEY `event_time` (`event`, `created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+
+            "CREATE TABLE IF NOT EXISTS `mod_clientloginverify_settings` (
+                `id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+                `client_id` INT(10) UNSIGNED NOT NULL,
+                `setting` VARCHAR(50) NOT NULL,
+                `value` VARCHAR(255) DEFAULT NULL,
+                `created_at` DATETIME DEFAULT NULL,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `client_setting` (`client_id`, `setting`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+        );
+
+        foreach ($tables as $sql) {
             full_query($sql);
         }
 
-        // Create email template if not exists
-        $templateName = 'Client Login Verification';
-        $result = select_query('tblemailtemplates', 'id', [
-            'name' => $templateName,
-            'type' => 'client',
-        ]);
-        if (!$result || mysql_num_rows($result) === 0) {
-            $emailBody = "Hello {\$client_name},\r\n\r\n"
-                . "A login attempt was made to your account.\r\n\r\n"
-                . "Your verification code is:\r\n\r\n"
-                . "{\$code}\r\n\r\n"
-                . "This code will expire in {\$expiry} minutes.\r\n\r\n"
-                . "Login Details:\r\n"
-                . "Date/Time: {\$datetime}\r\n"
-                . "IP Address: {\$ip}\r\n"
-                . "Browser: {\$browser}\r\n"
-                . "Operating System: {\$os}\r\n\r\n"
-                . "If you did not initiate this login, please change your password immediately.\r\n\r\n"
-                . "Regards,\r\n"
-                . "{\$company_name}";
+        clientloginverify_create_email_template();
 
-            insert_query('tblemailtemplates', [
-                'type'       => 'client',
-                'name'       => $templateName,
-                'subject'    => 'Your Login Verification Code',
-                'message'    => $emailBody,
-                'disabled'   => 0,
-                'custom'     => 1,
-                'created_at' => Time::dbNow(),
-                'updated_at' => Time::dbNow(),
-            ]);
-        }
-
-        return [
+        return array(
             'status'      => 'success',
-            'description' => 'Client Login Verify activated. Tables and email template created.',
-        ];
+            'description' => 'Client Login Verify activated. Tables and the email template are ready.',
+        );
     } catch (\Exception $e) {
-        return [
+        return array(
             'status'      => 'error',
             'description' => 'Activation failed: ' . $e->getMessage(),
-        ];
+        );
     }
 }
 
+/**
+ * Deactivation keeps all tables and data (so a mistaken deactivation loses
+ * nothing and reactivation restores everything).
+ */
 function clientloginverify_deactivate()
 {
-    return [
+    return array(
         'status'      => 'success',
-        'description' => 'Client Login Verify deactivated.',
-    ];
+        'description' => 'Client Login Verify deactivated. Your tables and logs were preserved.',
+    );
 }
 
 function clientloginverify_admin_permissions()
 {
-    return [
-        'Manage Client Login Verify',
-    ];
+    return array(
+        'Manage Settings' => 'Manage Settings',
+        'View Logs'       => 'View Logs',
+    );
 }
 
-function clientloginverify_asset_url($file)
+/**
+ * Insert the client email template if it does not already exist.
+ */
+function clientloginverify_create_email_template()
 {
-    $base = '';
-    try {
-        // Use WHMCS database function instead of Capsule for compatibility
-        $result = select_query('tblconfiguration', 'value', ['setting' => 'SystemURL']);
-        if ($result && $row = mysql_fetch_assoc($result)) {
-            $base = rtrim($row['value'], '/');
-        }
-    } catch (\Exception $e) {
-        $base = '';
+    $name = 'Client Login Verification';
+
+    $existing = select_query('tblemailtemplates', 'id', array(
+        'name' => $name,
+        'type' => 'general',
+    ));
+    if ($existing && function_exists('mysql_num_rows') && mysql_num_rows($existing) > 0) {
+        return;
     }
-    if (!$base && isset($_SERVER['HTTP_HOST'])) {
-        $proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $base = $proto . '://' . $_SERVER['HTTP_HOST'];
-    }
-    return $base . '/modules/addons/clientloginverify/' . ltrim($file, '/');
+
+    $message = "<p>Hello {\$client_name},</p>"
+        . "<p>A login to your account was requested. Use the verification code below to continue:</p>"
+        . "<p style=\"font-size:26px;font-weight:bold;letter-spacing:4px;\">{\$clv_code}</p>"
+        . "<p>This code expires in {\$clv_expiry} minutes.</p>"
+        . "<p><strong>Request details</strong><br>"
+        . "Time: {\$clv_datetime}<br>"
+        . "IP address: {\$clv_ip}<br>"
+        . "Browser: {\$clv_browser}<br>"
+        . "Operating system: {\$clv_os}</p>"
+        . "<p>If you did not try to log in, please change your password immediately.</p>"
+        . "<p>Regards,<br>{\$company_name}</p>";
+
+    insert_query('tblemailtemplates', array(
+        'type'     => 'general',
+        'name'     => $name,
+        'subject'  => 'Your login verification code',
+        'message'  => $message,
+        'fromname' => '',
+        'fromemail' => '',
+        'disabled' => 0,
+        'custom'   => 1,
+        'language' => '',
+        'copyto'   => '',
+        'plaintext' => 0,
+    ));
 }
+
+/* ======================================================================
+ * Admin output (addonmodules.php?module=clientloginverify)
+ * ==================================================================== */
 
 function clientloginverify_output($vars)
 {
     $modulelink = $vars['modulelink'];
-    $logoUrl = clientloginverify_asset_url('assets/logo.jpg');
-    $view   = isset($_REQUEST['view']) ? $_REQUEST['view'] : '';
-    $action = isset($_REQUEST['action']) ? $_REQUEST['action'] : '';
+    $logo       = CLV::assetUrl('assets/logo.jpg');
+    $view       = isset($_REQUEST['view']) ? preg_replace('/[^a-z]/', '', strtolower($_REQUEST['view'])) : 'dashboard';
+    $action     = isset($_REQUEST['action']) ? $_REQUEST['action'] : '';
+    $notice     = '';
+    $noticeType = 'success';
 
-    // Save the module settings edited from within this admin page (instead of
-    // the separate "Configure" screen).
-    if ($action === 'savesettings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-        check_token();
-        clientloginverify_save_settings($_POST);
-        echo '<div class="infobox"><strong>Settings saved.</strong></div>';
-        $view = 'settings';
-    }
+    // ---- Handle POST / GET actions (all CSRF protected) --------------
+    if ($action !== '') {
+        $tokenOk = (function_exists('check_token')) ? check_token('WHMCS.admin.default') : true;
 
-    if ($action === 'setclient' && isset($_REQUEST['client_id'], $_REQUEST['val'])) {
-        check_token();
-        $cid = (int) $_REQUEST['client_id'];
-        $val = ($_REQUEST['val'] === 'on') ? 'on' : 'off';
-        $row = \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')
-            ->where('client_id', $cid)
-            ->where('setting', 'twofa_enabled')
-            ->first();
-        if ($row) {
-            \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')->where('id', $row->id)
-                ->update(['value' => $val, 'created_at' => Time::dbNow()]);
-        } else {
-            \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')->insert([
-                'client_id'  => $cid,
-                'setting'    => 'twofa_enabled',
-                'value'      => $val,
-                'created_at' => Time::dbNow(),
-            ]);
+        if ($action === 'savesettings' && $_SERVER['REQUEST_METHOD'] === 'POST' && $tokenOk) {
+            CLV::saveSettings($_POST);
+            $notice = 'Settings saved.';
+            $view   = 'settings';
+        } elseif ($action === 'testemail' && $_SERVER['REQUEST_METHOD'] === 'POST' && $tokenOk) {
+            $cid = isset($_POST['test_client']) ? (int) $_POST['test_client'] : 0;
+            if ($cid > 0 && CLV::sendCode($cid, CLV::randomCode((int) CLV::setting('otpLength')))) {
+                $notice = 'Test email sent to client #' . $cid . '. Check the inbox and the mail log.';
+            } else {
+                $notice     = 'Test email could not be sent. Check the client ID and your WHMCS mail settings.';
+                $noticeType = 'error';
+            }
+            $view = 'settings';
+        } elseif ($action === 'toggleclient' && $tokenOk) {
+            $cid = isset($_GET['client_id']) ? (int) $_GET['client_id'] : 0;
+            $val = (isset($_GET['val']) && $_GET['val'] === 'on') ? 'on' : 'off';
+            if ($cid > 0) {
+                CLV::setClientOverride($cid, $val);
+                $notice = '2FA ' . ($val === 'on' ? 'enabled' : 'disabled') . ' for client #' . $cid . '.';
+            }
+            $view = 'clients';
+        } elseif ($action === 'clearcode' && $tokenOk) {
+            $cid = isset($_GET['client_id']) ? (int) $_GET['client_id'] : 0;
+            if ($cid > 0) {
+                CLV::clearCodes($cid);
+                $notice = 'Pending code cleared for client #' . $cid . '.';
+            }
+            $view = 'clients';
         }
-        echo '<div class="infobox"><strong>Saved.</strong></div>';
     }
 
-    // Settings editor lives inside this page — render and return early.
-    if ($view === 'settings') {
-        echo clientloginverify_settings_form($modulelink, $logoUrl);
-        return;
+    echo clientloginverify_render_header($modulelink, $logo, $view, $notice, $noticeType);
+
+    switch ($view) {
+        case 'settings':
+            echo clientloginverify_view_settings($modulelink);
+            break;
+        case 'clients':
+            echo clientloginverify_view_clients($modulelink);
+            break;
+        case 'logs':
+            echo clientloginverify_view_logs($modulelink);
+            break;
+        default:
+            echo clientloginverify_view_dashboard($modulelink);
+            break;
+    }
+}
+
+function clientloginverify_admin_token()
+{
+    return function_exists('generate_token') ? generate_token('link') : '';
+}
+
+function clientloginverify_render_header($modulelink, $logo, $view, $notice, $noticeType)
+{
+    $tabs = array(
+        'dashboard' => 'Dashboard',
+        'settings'  => 'Settings',
+        'clients'   => 'Clients',
+        'logs'      => 'Logs',
+    );
+
+    $html  = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">';
+    $html .= '<img src="' . htmlspecialchars($logo) . '" alt="Client Login Verify" style="max-height:46px;">';
+    $html .= '<div><h2 style="margin:0;">Client Login Verify</h2>';
+    $html .= '<span style="color:#777;font-size:12px;">Email based 2FA for client logins &middot; by Host Nibo</span></div></div>';
+
+    $status = CLV::isEnabled()
+        ? '<span style="background:#e6f4ea;color:#1e7e34;padding:2px 10px;border-radius:12px;font-size:12px;">Active</span>'
+        : '<span style="background:#fdecea;color:#b71c1c;padding:2px 10px;border-radius:12px;font-size:12px;">Disabled</span>';
+    $html .= '<p style="margin:0 0 12px;">Module status: ' . $status . '</p>';
+
+    if ($notice !== '') {
+        $bg = ($noticeType === 'error') ? '#fdecea' : '#e6f4ea';
+        $fg = ($noticeType === 'error') ? '#b71c1c' : '#1e7e34';
+        $html .= '<div style="background:' . $bg . ';color:' . $fg . ';padding:10px 14px;border-radius:6px;margin-bottom:14px;">'
+            . htmlspecialchars($notice) . '</div>';
     }
 
-    $smartyVars = ['modulelink' => $modulelink, 'view' => $view, 'logo_url' => $logoUrl];
+    $html .= '<ul class="nav nav-tabs" style="margin-bottom:16px;">';
+    foreach ($tabs as $key => $label) {
+        $active = ($view === $key) ? ' class="active"' : '';
+        $style  = ($view === $key) ? 'font-weight:bold;' : '';
+        $html  .= '<li' . $active . '><a style="' . $style . '" href="' . htmlspecialchars($modulelink) . '&view=' . $key . '">'
+            . $label . '</a></li>';
+    }
+    $html .= '</ul>';
 
-    if ($view === 'logs') {
-        $smartyVars['logs'] = \WHMCS\Database\Capsule::table('mod_clientloginverify_logs')
-            ->orderBy('created_at', 'desc')
-            ->limit(200)
+    return $html;
+}
+
+function clientloginverify_view_dashboard($modulelink)
+{
+    $stats = CLV::stats();
+
+    $card = function ($label, $value, $color) {
+        return '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #e3e8ee;border-radius:8px;padding:16px;text-align:center;">'
+            . '<div style="font-size:28px;font-weight:700;color:' . $color . ';">' . (int) $value . '</div>'
+            . '<div style="color:#777;font-size:13px;margin-top:4px;">' . htmlspecialchars($label) . '</div></div>';
+    };
+
+    $html  = '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px;">';
+    $html .= $card('Pending verifications', $stats['pending'], '#2f6df6');
+    $html .= $card('Verified (24h)', $stats['verified'], '#1e7e34');
+    $html .= $card('Failed (24h)', $stats['failed'], '#b71c1c');
+    $html .= $card('Total log entries', $stats['totalLogs'], '#5a6b85');
+    $html .= '</div>';
+
+    // Recent events
+    $html .= '<h3>Recent activity</h3>';
+    try {
+        $rows = \WHMCS\Database\Capsule::table(CLV::T_LOGS)
+            ->orderBy('id', 'desc')
+            ->limit(10)
             ->get();
-    } elseif ($view === 'clients') {
-        $rows = \WHMCS\Database\Capsule::table('tblclients')->orderBy('id', 'asc')->limit(100)->get();
-        $overrides = \WHMCS\Database\Capsule::table('mod_clientloginverify_settings')
-            ->where('setting', 'twofa_enabled')
-            ->pluck('value', 'client_id');
-        $clients = [];
-        foreach ($rows as $c) {
-            $override = $overrides[$c->id] ?? null;
-            $effective = Security::requires2FA($c->id) ? 'Required' : 'Skipped';
-            $current   = $override ?: 'default';
-            $next      = ($current === 'off') ? 'on' : 'off';
-            $label     = ($current === 'off') ? 'Enable' : 'Disable';
-            $clients[] = (object) [
-                'id'        => $c->id,
-                'name'      => trim($c->firstname . ' ' . $c->lastname),
-                'groupid'   => $c->groupid,
-                'effective' => $effective,
-                'current'   => $current,
-                'next'      => $next,
-                'label'     => $label,
-            ];
-        }
-        $smartyVars['clients'] = $clients;
-        $smartyVars['token']   = generate_token('link');
+    } catch (\Exception $e) {
+        $rows = array();
+    }
+
+    if (count($rows) === 0) {
+        $html .= '<p style="color:#777;">No activity recorded yet.</p>';
     } else {
-        $smartyVars['pending']   = \WHMCS\Database\Capsule::table('mod_clientloginverify_codes')
-            ->whereNull('verified_at')
-            ->where('expires_at', '>', Time::dbNow())
-            ->count();
-        $smartyVars['totalLogs'] = \WHMCS\Database\Capsule::table('mod_clientloginverify_logs')->count();
+        $html .= '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">';
+        $html .= '<thead><tr><th>Client</th><th>Event</th><th>IP</th><th>Message</th><th>Time (UTC)</th></tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $html .= '<tr><td>' . (int) $r->client_id . '</td><td>' . htmlspecialchars($r->event) . '</td><td>'
+                . htmlspecialchars((string) $r->ip) . '</td><td>' . htmlspecialchars((string) $r->message) . '</td><td>'
+                . htmlspecialchars((string) $r->created_at) . '</td></tr>';
+        }
+        $html .= '</tbody></table>';
     }
 
-    $template = ($view === 'clients' || $view === 'logs') ? 'settings.tpl' : 'admin.tpl';
+    $html .= '<p style="margin-top:16px;"><a class="btn btn-default" href="' . htmlspecialchars($modulelink)
+        . '&view=logs">View all logs</a></p>';
 
-    echo clientloginverify_render_admin($template, $smartyVars);
+    return $html;
 }
 
-/**
- * Definition of the module settings that are editable from inside the admin
- * output page. Stored in tbladdonmodules (same table WHMCS uses for the
- * built-in Configure screen), so both stay in sync.
- */
-function clientloginverify_settings_fields()
+function clientloginverify_view_settings($modulelink)
 {
-    return [
-        'enableModule'      => ['label' => 'Enable Module', 'type' => 'yesno', 'default' => 'on', 'desc' => 'Enable email 2FA for client logins'],
-        'forceVerification' => ['label' => 'Force Verification', 'type' => 'yesno', 'default' => 'on', 'desc' => 'Require 2FA for every client login'],
-        'otpLength'         => ['label' => 'OTP Length', 'type' => 'text', 'default' => '6', 'desc' => 'Number of digits in the OTP (4-8)'],
-        'otpExpiry'         => ['label' => 'OTP Expiry (minutes)', 'type' => 'text', 'default' => '5', 'desc' => 'How long the OTP remains valid'],
-        'maxAttempts'       => ['label' => 'Maximum Attempts', 'type' => 'text', 'default' => '5', 'desc' => 'Max incorrect entries before lockout'],
-        'resendCooldown'    => ['label' => 'Resend Cooldown (seconds)', 'type' => 'text', 'default' => '60', 'desc' => 'Wait time before a new code can be requested'],
-        'maxResends'        => ['label' => 'Maximum Resends', 'type' => 'text', 'default' => '3', 'desc' => 'How many times a code can be resent'],
-        'emailTemplate'     => ['label' => 'Email Template', 'type' => 'text', 'default' => 'Client Login Verification', 'desc' => 'Name of the WHMCS client email template'],
-        'logAttempts'       => ['label' => 'Log Attempts', 'type' => 'yesno', 'default' => 'on', 'desc' => 'Record verification events'],
-        'logIp'             => ['label' => 'Log IP Address', 'type' => 'yesno', 'default' => 'on', 'desc' => 'Store client IP with each log entry'],
-        'excludedGroups'    => ['label' => 'Excluded Client Groups', 'type' => 'text', 'default' => '', 'desc' => 'Comma separated client group IDs to skip 2FA'],
-    ];
-}
+    $token  = clientloginverify_admin_token();
+    $fields = CLV::fields();
 
-function clientloginverify_get_setting($key, $default = '')
-{
-    $val = \WHMCS\Database\Capsule::table('tbladdonmodules')
-        ->where('module', 'clientloginverify')
-        ->where('setting', $key)
-        ->value('value');
-    return ($val === null) ? $default : $val;
-}
-
-/**
- * Persist submitted settings into tbladdonmodules and clear the runtime cache.
- */
-function clientloginverify_save_settings(array $post)
-{
-    foreach (clientloginverify_settings_fields() as $key => $field) {
-        if ($field['type'] === 'yesno') {
-            $value = (isset($post[$key]) && $post[$key] === 'on') ? 'on' : '';
-        } else {
-            $value = isset($post[$key]) ? trim((string) $post[$key]) : '';
-        }
-
-        $exists = \WHMCS\Database\Capsule::table('tbladdonmodules')
-            ->where('module', 'clientloginverify')
-            ->where('setting', $key)
-            ->exists();
-
-        if ($exists) {
-            \WHMCS\Database\Capsule::table('tbladdonmodules')
-                ->where('module', 'clientloginverify')
-                ->where('setting', $key)
-                ->update(['value' => $value]);
-        } else {
-            \WHMCS\Database\Capsule::table('tbladdonmodules')->insert([
-                'module'  => 'clientloginverify',
-                'setting' => $key,
-                'value'   => $value,
-            ]);
-        }
-    }
-}
-
-/**
- * Renders the settings editor form shown inside the addon page.
- */
-function clientloginverify_settings_form($modulelink, $logoUrl)
-{
-    $fields = clientloginverify_settings_fields();
-    $token  = generate_token('link');
-
-    $html  = '<img src="' . htmlspecialchars($logoUrl) . '" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;">';
-    $html .= '<h2>Module Settings</h2>';
-    $html .= '<p><a href="' . htmlspecialchars($modulelink) . '">&laquo; Back to Dashboard</a></p>';
-    $html .= '<form method="post" action="' . htmlspecialchars($modulelink) . '&action=savesettings">';
+    $html  = '<form method="post" action="' . htmlspecialchars($modulelink) . '&action=savesettings">';
     $html .= $token;
-    $html .= '<input type="hidden" name="action" value="savesettings">';
     $html .= '<table class="form" width="100%" border="0" cellspacing="1" cellpadding="3">';
 
     foreach ($fields as $key => $field) {
-        $current = clientloginverify_get_setting($key, $field['default']);
-        $html .= '<tr><td class="fieldlabel" width="30%"><strong>' . htmlspecialchars($field['label']) . '</strong></td><td class="fieldarea">';
+        $current = CLV::setting($key);
+        $html .= '<tr><td class="fieldlabel" width="30%">' . htmlspecialchars($field['label']) . '</td><td class="fieldarea">';
 
         if ($field['type'] === 'yesno') {
             $checked = ($current === 'on') ? ' checked' : '';
-            $html .= '<label><input type="checkbox" name="' . htmlspecialchars($key) . '" value="on"' . $checked . '> Enabled</label>';
+            $html   .= '<label><input type="checkbox" name="' . htmlspecialchars($key) . '" value="on"' . $checked . '> Enabled</label>';
         } else {
-            $html .= '<input type="text" name="' . htmlspecialchars($key) . '" value="' . htmlspecialchars((string) $current) . '" style="min-width:220px;">';
+            $html .= '<input type="text" name="' . htmlspecialchars($key) . '" value="'
+                . htmlspecialchars((string) $current) . '" style="min-width:240px;">';
         }
 
         if (!empty($field['desc'])) {
@@ -431,176 +372,273 @@ function clientloginverify_settings_form($modulelink, $logoUrl)
     }
 
     $html .= '</table>';
-    $html .= '<p><input type="submit" value="Save Changes" class="btn btn-primary"></p>';
+    $html .= '<p><input type="submit" class="btn btn-primary" value="Save Changes"></p>';
+    $html .= '</form>';
+
+    // Test email tool
+    $html .= '<hr><h3>Send test email</h3>';
+    $html .= '<p style="color:#777;font-size:13px;">Send a sample verification email to a client to confirm your WHMCS mail settings work before relying on 2FA.</p>';
+    $html .= '<form method="post" action="' . htmlspecialchars($modulelink) . '&action=testemail" style="display:flex;gap:8px;align-items:center;">';
+    $html .= $token;
+    $html .= '<input type="number" name="test_client" placeholder="Client ID" min="1" style="width:140px;" required>';
+    $html .= '<input type="submit" class="btn btn-default" value="Send Test Email">';
     $html .= '</form>';
 
     return $html;
 }
 
-function clientloginverify_render_admin($template, $vars)
+function clientloginverify_view_clients($modulelink)
 {
-    if (class_exists('WHMCS\\View\\Smarty')) {
-        try {
-            $smarty = new \WHMCS\View\Smarty();
-            $smarty->setTemplateDir(__DIR__ . '/templates');
-            foreach ($vars as $k => $v) {
-                $smarty->assign($k, $v);
+    $token  = clientloginverify_admin_token();
+    $search = isset($_GET['q']) ? trim($_GET['q']) : '';
+    $page   = isset($_GET['p']) ? max(1, (int) $_GET['p']) : 1;
+    $per    = 25;
+
+    try {
+        $query = \WHMCS\Database\Capsule::table('tblclients');
+        if ($search !== '') {
+            $like = '%' . $search . '%';
+            $query->where(function ($q) use ($like, $search) {
+                $q->where('firstname', 'like', $like)
+                  ->orWhere('lastname', 'like', $like)
+                  ->orWhere('email', 'like', $like);
+                if (ctype_digit($search)) {
+                    $q->orWhere('id', (int) $search);
+                }
+            });
+        }
+        $total = $query->count();
+        $rows  = $query->orderBy('id', 'asc')
+            ->skip(($page - 1) * $per)
+            ->take($per)
+            ->get();
+    } catch (\Exception $e) {
+        $rows  = array();
+        $total = 0;
+    }
+
+    $html  = '<form method="get" action="' . htmlspecialchars($_SERVER['PHP_SELF']) . '" style="margin-bottom:12px;">';
+    // Preserve WHMCS module routing params.
+    $html .= '<input type="hidden" name="module" value="clientloginverify">';
+    $html .= '<input type="hidden" name="view" value="clients">';
+    $html .= '<input type="text" name="q" value="' . htmlspecialchars($search) . '" placeholder="Search name, email or ID" style="width:260px;">';
+    $html .= ' <input type="submit" class="btn btn-default" value="Search">';
+    if ($search !== '') {
+        $html .= ' <a class="btn btn-default" href="' . htmlspecialchars($modulelink) . '&view=clients">Reset</a>';
+    }
+    $html .= '</form>';
+
+    if (count($rows) === 0) {
+        return $html . '<p style="color:#777;">No clients found.</p>';
+    }
+
+    $html .= '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">';
+    $html .= '<thead><tr><th>ID</th><th>Name</th><th>Group</th><th>2FA status</th><th>Actions</th></tr></thead><tbody>';
+
+    foreach ($rows as $c) {
+        $override  = CLV::clientOverride($c->id);
+        $required  = CLV::requires2FA($c->id);
+        $stateText = $required ? 'Required' : 'Not required';
+        $overText  = ($override === null) ? 'default' : $override;
+        $next      = ($override === 'off') ? 'on' : 'off';
+        $label     = ($override === 'off') ? 'Enable 2FA' : 'Disable 2FA';
+
+        $name = trim($c->firstname . ' ' . $c->lastname);
+        $html .= '<tr><td>' . (int) $c->id . '</td><td>' . htmlspecialchars($name) . '</td><td>'
+            . (int) $c->groupid . '</td><td>' . htmlspecialchars($stateText) . ' <span style="color:#999;">(' . htmlspecialchars($overText) . ')</span></td><td>';
+        $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink)
+            . '&view=clients&action=toggleclient&client_id=' . (int) $c->id . '&val=' . $next
+            . '&token=' . urlencode(clientloginverify_token_value()) . '">' . $label . '</a> ';
+        $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink)
+            . '&view=clients&action=clearcode&client_id=' . (int) $c->id
+            . '&token=' . urlencode(clientloginverify_token_value()) . '">Clear pending code</a>';
+        $html .= '</td></tr>';
+    }
+    $html .= '</tbody></table>';
+
+    // Pagination
+    $pages = (int) ceil($total / $per);
+    if ($pages > 1) {
+        $html .= '<div style="margin-top:12px;">';
+        for ($i = 1; $i <= $pages; $i++) {
+            if ($i === $page) {
+                $html .= '<strong style="margin:0 4px;">' . $i . '</strong>';
+            } else {
+                $q = ($search !== '') ? '&q=' . urlencode($search) : '';
+                $html .= '<a style="margin:0 4px;" href="' . htmlspecialchars($modulelink) . '&view=clients&p=' . $i . $q . '">' . $i . '</a>';
             }
-            return $smarty->fetch($template);
-        } catch (\Exception $e) {
-            // fall through
         }
+        $html .= '</div>';
     }
-    if (class_exists('WHMCS\\Smarty')) {
-        try {
-            $smarty = new \WHMCS\Smarty();
-            $smarty->setTemplateDir(__DIR__ . '/templates');
-            foreach ($vars as $k => $v) {
-                $smarty->assign($k, $v);
+
+    return $html;
+}
+
+/**
+ * The link-token value only (used inside anchor hrefs). generate_token('link')
+ * returns a full hidden input, so for links we need just the raw value.
+ */
+function clientloginverify_token_value()
+{
+    if (!function_exists('generate_token')) {
+        return '';
+    }
+    $field = generate_token('link');
+    if (preg_match('/value="([^"]+)"/', $field, $m)) {
+        return $m[1];
+    }
+    return '';
+}
+
+function clientloginverify_view_logs($modulelink)
+{
+    $event  = isset($_GET['event']) ? preg_replace('/[^a-z_]/', '', strtolower($_GET['event'])) : '';
+    $client = isset($_GET['client']) ? (int) $_GET['client'] : 0;
+    $page   = isset($_GET['p']) ? max(1, (int) $_GET['p']) : 1;
+    $per    = 50;
+
+    try {
+        $query = \WHMCS\Database\Capsule::table(CLV::T_LOGS);
+        if ($event !== '') {
+            $query->where('event', $event);
+        }
+        if ($client > 0) {
+            $query->where('client_id', $client);
+        }
+        $total = $query->count();
+        $rows  = $query->orderBy('id', 'desc')
+            ->skip(($page - 1) * $per)
+            ->take($per)
+            ->get();
+    } catch (\Exception $e) {
+        $rows  = array();
+        $total = 0;
+    }
+
+    $html  = '<form method="get" action="' . htmlspecialchars($_SERVER['PHP_SELF']) . '" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">';
+    $html .= '<input type="hidden" name="module" value="clientloginverify">';
+    $html .= '<input type="hidden" name="view" value="logs">';
+    $events = array('' => 'All events', 'otp_sent' => 'Code sent', 'verified' => 'Verified', 'failed' => 'Failed', 'resent' => 'Resent', 'email_failed' => 'Email failed', 'throttled' => 'Throttled');
+    $html .= '<select name="event">';
+    foreach ($events as $val => $label) {
+        $sel = ($event === $val) ? ' selected' : '';
+        $html .= '<option value="' . htmlspecialchars($val) . '"' . $sel . '>' . htmlspecialchars($label) . '</option>';
+    }
+    $html .= '</select>';
+    $html .= '<input type="number" name="client" value="' . ($client > 0 ? $client : '') . '" placeholder="Client ID" min="1" style="width:130px;">';
+    $html .= '<input type="submit" class="btn btn-default" value="Filter">';
+    $html .= '<a class="btn btn-default" href="' . htmlspecialchars($modulelink) . '&view=logs">Reset</a>';
+    $html .= '</form>';
+
+    if (count($rows) === 0) {
+        return $html . '<p style="color:#777;">No log entries match your filter.</p>';
+    }
+
+    $html .= '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">';
+    $html .= '<thead><tr><th>ID</th><th>Client</th><th>Event</th><th>IP</th><th>Message</th><th>Time (UTC)</th></tr></thead><tbody>';
+    foreach ($rows as $r) {
+        $html .= '<tr><td>' . (int) $r->id . '</td><td>' . (int) $r->client_id . '</td><td>' . htmlspecialchars($r->event)
+            . '</td><td>' . htmlspecialchars((string) $r->ip) . '</td><td>' . htmlspecialchars((string) $r->message)
+            . '</td><td>' . htmlspecialchars((string) $r->created_at) . '</td></tr>';
+    }
+    $html .= '</tbody></table>';
+
+    $pages = (int) ceil($total / $per);
+    if ($pages > 1) {
+        $html .= '<div style="margin-top:12px;">';
+        $extra = ($event !== '' ? '&event=' . urlencode($event) : '') . ($client > 0 ? '&client=' . $client : '');
+        for ($i = 1; $i <= $pages && $i <= 50; $i++) {
+            if ($i === $page) {
+                $html .= '<strong style="margin:0 4px;">' . $i . '</strong>';
+            } else {
+                $html .= '<a style="margin:0 4px;" href="' . htmlspecialchars($modulelink) . '&view=logs&p=' . $i . $extra . '">' . $i . '</a>';
             }
-            return $smarty->fetch($template);
-        } catch (\Exception $e) {
-            // fall through
         }
+        $html .= '</div>';
     }
-    return clientloginverify_admin_fallback($vars);
+
+    return $html;
 }
 
-function clientloginverify_admin_fallback($vars)
-{
-    $modulelink = $vars['modulelink'];
-    $view = isset($vars['view']) ? $vars['view'] : '';
-
-    if ($view === 'logs') {
-        $html = '<p><img src="' . htmlspecialchars($vars['logo_url']) . '" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;"></p>'
-            . '<h2>Verification Logs</h2><p><a href="' . $modulelink . '">&laquo; Back</a></p>'
-            . '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">'
-            . '<thead><tr><th>Client ID</th><th>Event</th><th>IP</th><th>Message</th><th>Date/Time</th></tr></thead><tbody>';
-        foreach ($vars['logs'] as $log) {
-            $html .= '<tr><td>' . (int) $log->client_id . '</td><td>' . htmlspecialchars($log->event)
-                . '</td><td>' . htmlspecialchars((string) $log->ip) . '</td><td>'
-                . htmlspecialchars((string) $log->message) . '</td><td>' . htmlspecialchars($log->created_at) . '</td></tr>';
-        }
-        return $html . '</tbody></table>';
-    }
-
-    if ($view === 'clients') {
-        $html = '<p><img src="' . htmlspecialchars($vars['logo_url']) . '" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;"></p>'
-            . '<h2>Client 2FA Status</h2><p><a href="' . $modulelink . '">&laquo; Back</a></p>'
-            . '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">'
-            . '<thead><tr><th>ID</th><th>Name</th><th>Group</th><th>2FA</th><th>Action</th></tr></thead><tbody>';
-        foreach ($vars['clients'] as $c) {
-            $html .= '<tr><td>' . (int) $c->id . '</td><td>' . htmlspecialchars($c->name) . '</td><td>'
-                . (int) $c->groupid . '</td><td>' . htmlspecialchars($c->effective) . ' (' . htmlspecialchars($c->current) . ')</td><td>'
-                . '<a href="' . $modulelink . '&view=clients&action=setclient&client_id=' . (int) $c->id . '&val=' . $c->next
-                . '&token=' . urlencode($vars['token']) . '">'
-                . htmlspecialchars($c->label) . '</a></td></tr>';
-        }
-        return $html . '</tbody></table>';
-    }
-
-    return '<p><img src="' . htmlspecialchars($vars['logo_url']) . '" alt="Client Login Verify" style="max-height:48px;margin-bottom:12px;"></p>'
-        . '<h2>Client Login Verify</h2>'
-        . '<p>Email-based two-factor authentication for client logins.</p>'
-        . '<ul><li><strong>Pending verifications:</strong> ' . (int) ($vars['pending'] ?? 0) . '</li>'
-        . '<li><strong>Total log entries:</strong> ' . (int) ($vars['totalLogs'] ?? 0) . '</li></ul>'
-        . '<p><a class="btn btn-default" href="' . $modulelink . '&view=clients">Client 2FA Status</a> '
-        . '<a class="btn btn-default" href="' . $modulelink . '&view=logs">View Logs</a> '
-        . '<a class="btn btn-primary" href="' . $modulelink . '&view=settings">Module Settings</a></p>';
-}
-
-function clientloginverify_lang()
-{
-    $lang = [];
-    $file = __DIR__ . '/lang/english.php';
-    if (file_exists($file)) {
-        include $file;
-    }
-    return $lang;
-}
+/* ======================================================================
+ * Client area verification page
+ * ==================================================================== */
 
 function clientloginverify_clientarea($vars)
 {
-    $lang = clientloginverify_lang();
-    $clientId = Session::get('uid');
+    $lang = array();
+    $langFile = __DIR__ . '/lang/english.php';
+    if (is_file($langFile)) {
+        include $langFile;
+    }
 
-    $base = [
-        'pagetitle'    => $lang['title'],
-        'breadcrumb'   => ['index.php?m=clientloginverify&clvverify=1' => $lang['title']],
-        'templatefile'  => 'verify',
-        'requirelogin'  => true,
-        'forcessl'      => false,
-        'vars'          => [],
-    ];
+    $base = array(
+        'pagetitle'    => isset($lang['title']) ? $lang['title'] : 'Verify Your Login',
+        'breadcrumb'   => array('index.php?m=clientloginverify' => isset($lang['title']) ? $lang['title'] : 'Verify Your Login'),
+        'templatefile' => 'verify',
+        'requirelogin' => true,
+        'forcessl'     => false,
+        'vars'         => array('lang' => $lang),
+    );
 
-    if (!$clientId) {
+    $clientId = CLV::currentClientId();
+    if ($clientId <= 0) {
         return $base;
     }
 
     try {
-        if (!isset($_GET['clvverify']) || $_GET['clvverify'] !== '1') {
+        // Not on the dedicated verify page: nothing to render here.
+        if (!CLV::isVerifyPage()) {
             $base['vars']['normalview'] = true;
-            $base['vars']['lang']       = $lang;
             return $base;
         }
 
-        if (!Security::requires2FA($clientId)) {
-            redir('rp=/');
+        if (!CLV::requires2FA($clientId) || CLV::sessionGet('clv_passed') === true) {
+            CLV::redirect('clientarea.php');
         }
 
-        if (Session::get('clv_2fa_passed') === true) {
-            redir('rp=/');
+        if (!CLV::hasPendingCode($clientId)) {
+            // No live code (expired or cleared): send them back to log in again.
+            CLV::sessionForget('clv_passed');
+            CLV::redirect('logout.php');
         }
 
-        if (!OTP::hasPending($clientId)) {
-            redir('rp=/login', 'clientarea.php');
-            exit;
-        }
-
-        $otpLength = (int) Security::setting('otpLength', 6);
+        $otpLength = (int) CLV::setting('otpLength');
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            if (!check_token()) {
-                exit;
-            }
-            if (isset($_POST['clv_otp'])) {
-                $otp    = preg_replace('/\D/', '', $_POST['clv_otp']);
-                $result = OTP::verify($clientId, $otp);
-                if ($result['success']) {
-                    Session::set('clv_2fa_passed', true);
-                    Logger::log($clientId, 'verified', $_SERVER['REMOTE_ADDR'] ?? null);
-                    if (function_exists('session_regenerate_id')) {
-                        session_regenerate_id(true);
-                    }
-                    redir('rp=/');
-                } else {
-                    Logger::log($clientId, 'failed', $_SERVER['REMOTE_ADDR'] ?? null, $result['message']);
-                    $base['vars']['error'] = $result['message'];
-                }
+            $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
+            if (!$tokenOk) {
+                $base['vars']['error'] = 'Your session has expired. Please try again.';
             } elseif (isset($_GET['action']) && $_GET['action'] === 'resend') {
-                $res = Security::resend($clientId);
-                if ($res['ok']) {
-                    $base['vars']['info'] = $lang['code_resent'];
-                } else {
-                    $base['vars']['error'] = $res['message'];
+                $res = CLV::resendCode($clientId);
+                $base['vars'][$res['success'] ? 'info' : 'error'] = $res['message'];
+            } elseif (isset($_POST['clv_code'])) {
+                $res = CLV::verifyCode($clientId, $_POST['clv_code']);
+                if ($res['success']) {
+                    CLV::sessionSet('clv_passed', true);
+                    if (function_exists('session_regenerate_id')) {
+                        @session_regenerate_id(true);
+                    }
+                    CLV::redirect('clientarea.php');
                 }
+                $base['vars']['error'] = $res['message'];
             }
         }
 
-        // Display email failure error from ClientLogin hook
-        $emailError = Session::get('clv_email_error');
+        // Surface an email delivery failure recorded during login.
+        $emailError = CLV::sessionGet('clv_email_error');
         if ($emailError) {
-            Session::delete('clv_email_error');
-            $base['vars']['error'] = $emailError;
+            CLV::sessionForget('clv_email_error');
+            if (empty($base['vars']['error'])) {
+                $base['vars']['error'] = $emailError;
+            }
         }
 
-        $base['vars']['token']      = generate_token('plain');
+        $base['vars']['token']      = function_exists('generate_token') ? generate_token('plain') : '';
         $base['vars']['otp_length'] = $otpLength;
-        $base['vars']['lang']       = $lang;
     } catch (\Exception $e) {
         $base['vars']['error'] = 'An unexpected error occurred. Please try again or contact support.';
         $base['vars']['token'] = function_exists('generate_token') ? generate_token('plain') : '';
-        $base['vars']['lang']  = $lang;
     }
 
     return $base;

@@ -1,18 +1,8 @@
 {
     "name": "Client Login Verify",
-    "description": "Email-based two-factor authentication (2FA) for WHMCS client logins. After a successful password login, a one-time verification code is emailed to the client and all client-area pages stay locked until the code is entered.",
-    "version": "1.0",
+    "description": "Email based two factor authentication (2FA) for WHMCS client logins. After a successful password login a one time verification code is emailed to the client and every client area page stays locked until the code is entered.",
+    "version": "3.0",
     "author": "Host Nibo",
     "type": "addon",
-    "language": "english",
-    "fields": {},
-    "hooks": [
-        "ClientLogin",
-        "ClientAreaPageLogin",
-        "ClientAreaPage",
-        "ClientAreaHeadOutput",
-        "ClientAreaFooterOutput",
-        "ClientLogout",
-        "DailyCronJob"
-    ]
+    "language": "english"
 }
