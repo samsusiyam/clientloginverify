@@ -593,14 +593,23 @@ function clientloginverify_clientarea($vars)
             return $base;
         }
 
+        // Already verified, or 2FA not required for this client: let them in.
         if (!CLV::requires2FA($clientId) || CLV::sessionGet('clv_passed') === true) {
             CLV::redirect('clientarea.php');
         }
 
+        // Ensure there is always a live code so the form can render. If none is
+        // pending (expired, cleared, or the page was opened directly) issue a
+        // fresh one and email it rather than bouncing the client to logout.
         if (!CLV::hasPendingCode($clientId)) {
-            // No live code (expired or cleared): send them back to log in again.
-            CLV::sessionForget('clv_passed');
-            CLV::redirect('logout.php');
+            $code = CLV::issueCode($clientId);
+            if (CLV::sendCode($clientId, $code)) {
+                CLV::log($clientId, 'otp_sent', 'Verification code emailed (auto-issued on verify page)');
+                $base['vars']['info'] = isset($lang['code_resent']) ? $lang['code_resent'] : 'A verification code has been sent to your email.';
+            } else {
+                CLV::log($clientId, 'email_failed', 'Failed to auto-issue verification email');
+                $base['vars']['error'] = 'We could not send your verification email. Please use "Resend code" or contact support.';
+            }
         }
 
         $otpLength = (int) CLV::setting('otpLength');
