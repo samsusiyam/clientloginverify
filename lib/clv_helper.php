@@ -1033,6 +1033,41 @@ class CLV
         }
     }
 
+    /**
+     * Delete a single log entry by id. Returns true if a row was removed.
+     */
+    public static function deleteLog($logId)
+    {
+        try {
+            $affected = \WHMCS\Database\Capsule::table(self::T_LOGS)
+                ->where('id', (int) $logId)
+                ->delete();
+            return ($affected > 0);
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Delete log entries, optionally restricted to an event type and/or client.
+     * With no filter it clears the whole log table. Returns the number deleted.
+     */
+    public static function clearLogs($event = '', $clientId = 0)
+    {
+        try {
+            $query = \WHMCS\Database\Capsule::table(self::T_LOGS);
+            if ($event !== '') {
+                $query->where('event', $event);
+            }
+            if ((int) $clientId > 0) {
+                $query->where('client_id', (int) $clientId);
+            }
+            return (int) $query->delete();
+        } catch (\Exception $e) {
+            return 0;
+        }
+    }
+
     /* ------------------------------------------------------------------
      * Maintenance
      * ------------------------------------------------------------------ */

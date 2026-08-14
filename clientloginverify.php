@@ -234,6 +234,23 @@ function clientloginverify_output($vars)
                 $notice = 'Pending code cleared for client #' . $cid . '.';
             }
             $view = 'clients';
+        } elseif ($action === 'deletelog' && $tokenOk) {
+            $logId = isset($_GET['log_id']) ? (int) $_GET['log_id'] : 0;
+            if ($logId > 0 && CLV::deleteLog($logId)) {
+                $notice = 'Log entry #' . $logId . ' deleted.';
+            } else {
+                $notice     = 'Could not delete that log entry.';
+                $noticeType = 'error';
+            }
+            $view = 'logs';
+        } elseif ($action === 'clearlogs' && $tokenOk) {
+            // Respect the current event/client filter so admins can clear a
+            // subset or everything.
+            $fEvent  = isset($_GET['event']) ? preg_replace('/[^a-z_]/', '', strtolower($_GET['event'])) : '';
+            $fClient = isset($_GET['client']) ? (int) $_GET['client'] : 0;
+            $deleted = CLV::clearLogs($fEvent, $fClient);
+            $notice  = $deleted . ' log entr' . ($deleted === 1 ? 'y' : 'ies') . ' deleted.';
+            $view    = 'logs';
         }
     }
 
@@ -537,12 +554,30 @@ function clientloginverify_view_logs($modulelink)
         return $html . '<p style="color:#777;">No log entries match your filter.</p>';
     }
 
+    // Clear-logs button (honours the active filter). JS confirm prevents an
+    // accidental bulk delete.
+    $tok       = clientloginverify_token_value();
+    $clearHref = htmlspecialchars($modulelink) . '&view=logs&action=clearlogs'
+        . ($event !== '' ? '&event=' . urlencode($event) : '')
+        . ($client > 0 ? '&client=' . $client : '')
+        . '&token=' . urlencode($tok);
+    $clearLabel = ($event !== '' || $client > 0) ? 'Delete filtered logs' : 'Delete all logs';
+    $html .= '<p><a class="btn btn-danger" href="' . $clearHref . '" '
+        . 'onclick="return confirm(\'Delete these log entries? This cannot be undone.\');">'
+        . htmlspecialchars($clearLabel) . '</a></p>';
+
     $html .= '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">';
-    $html .= '<thead><tr><th>ID</th><th>Client</th><th>Event</th><th>IP</th><th>Message</th><th>Time (UTC)</th></tr></thead><tbody>';
+    $html .= '<thead><tr><th>ID</th><th>Client</th><th>Event</th><th>IP</th><th>Message</th><th>Time (UTC)</th><th>Action</th></tr></thead><tbody>';
     foreach ($rows as $r) {
+        $delHref = htmlspecialchars($modulelink) . '&view=logs&action=deletelog&log_id=' . (int) $r->id
+            . ($event !== '' ? '&event=' . urlencode($event) : '')
+            . ($client > 0 ? '&client=' . $client : '')
+            . '&token=' . urlencode($tok);
         $html .= '<tr><td>' . (int) $r->id . '</td><td>' . (int) $r->client_id . '</td><td>' . htmlspecialchars($r->event)
             . '</td><td>' . htmlspecialchars((string) $r->ip) . '</td><td>' . htmlspecialchars((string) $r->message)
-            . '</td><td>' . htmlspecialchars((string) $r->created_at) . '</td></tr>';
+            . '</td><td>' . htmlspecialchars((string) $r->created_at) . '</td>'
+            . '<td><a class="btn btn-xs btn-danger" href="' . $delHref . '" '
+            . 'onclick="return confirm(\'Delete this log entry?\');">Delete</a></td></tr>';
     }
     $html .= '</tbody></table>';
 
