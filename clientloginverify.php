@@ -626,10 +626,12 @@ function clientloginverify_clientarea($vars)
             } elseif (isset($_POST['clv_code'])) {
                 $res = CLV::verifyCode($clientId, $_POST['clv_code']);
                 if ($res['success']) {
+                    // Mark passed for THIS client and session. We intentionally
+                    // do NOT call session_regenerate_id() here: WHMCS 8.x manages
+                    // its own session/login token, and regenerating the raw PHP
+                    // session id drops the logged-in state, bouncing the client
+                    // back to the login page right after a correct code.
                     CLV::markPassed($clientId);
-                    if (function_exists('session_regenerate_id')) {
-                        @session_regenerate_id(true);
-                    }
                     CLV::redirect(CLV::systemUrl('clientarea.php'));
                 }
                 $base['vars']['error'] = $res['message'];
