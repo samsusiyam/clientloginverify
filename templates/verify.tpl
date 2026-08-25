@@ -247,7 +247,7 @@
 </div>
 
 <!-- Custom Animated Confirm Modal -->
-<div class="clv-modal-overlay" id="clv_modal" style="display:none;">
+<div class="clv-modal-overlay" id="clv_modal" style="display:none;" onclick="if(event.target===this) clvCloseModal();">
     <div class="clv-modal-card">
         <div class="clv-modal-icon" id="clv_modal_icon">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -260,7 +260,7 @@
         <p class="clv-modal-desc" id="clv_modal_desc">Are you sure you want to proceed?</p>
         <div class="clv-modal-actions">
             <button type="button" class="clv-modal-btn clv-modal-btn-cancel" onclick="clvCloseModal();">Cancel</button>
-            <button type="button" class="clv-modal-btn clv-modal-btn-confirm" id="clv_modal_confirm_btn">Confirm</button>
+            <button type="button" class="clv-modal-btn clv-modal-btn-confirm" id="clv_modal_confirm_btn" onclick="clvExecuteConfirm();">Confirm</button>
         </div>
     </div>
 </div>
@@ -460,6 +460,22 @@ function clvCloseModal() {
     setTimeout(function(){ modal.style.display = 'none'; }, 200);
     clvPendingAction = null;
 }
+
+function clvExecuteConfirm() {
+    if (typeof clvPendingAction === 'function') {
+        var act = clvPendingAction;
+        clvCloseModal();
+        act();
+    } else {
+        clvCloseModal();
+    }
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' || e.keyCode === 27) {
+        clvCloseModal();
+    }
+});
 
 function clvConfirmGenerateCodes() {
     clvShowConfirm({
