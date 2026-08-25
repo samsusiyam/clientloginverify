@@ -1,19 +1,18 @@
 <div class="clv-verify-container">
     <div class="clv-card">
-        {if $view_mode == 'devices'}
+        {if $view_mode == 'security' || $view_mode == 'devices'}
             <div class="clv-icon-wrapper clv-icon-shield">
                 <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                    <line x1="8" y1="21" x2="16" y2="21"></line>
-                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                    <polyline points="9 12 11 14 15 10"></polyline>
                 </svg>
             </div>
-            <h2 class="clv-title">{$lang.trusted_devices_title|default:'Trusted Devices'}</h2>
-            <p class="clv-text">{$lang.trusted_devices_desc|default:'These browsers and devices have been trusted and bypass two-factor verification on login.'}</p>
+            <h2 class="clv-title">{$lang.security_center|default:'2FA Security Center'}</h2>
+            <p class="clv-text">{$lang.backup_codes_desc|default:'Manage your login security, emergency recovery codes, and trusted browsers.'}</p>
 
             {if $info}
                 <div class="clv-alert clv-alert-info">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
                         <circle cx="12" cy="12" r="10"></circle>
                         <line x1="12" y1="16" x2="12" y2="12"></line>
                         <line x1="12" y1="8" x2="12.01" y2="8"></line>
@@ -22,40 +21,93 @@
                 </div>
             {/if}
 
-            {if $client_devices && count($client_devices) > 0}
-                <div class="clv-devices-list">
-                    {foreach from=$client_devices item=dev}
-                        <div class="clv-device-item">
-                            <div class="clv-device-info">
-                                <div class="clv-device-name">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                                        <line x1="8" y1="21" x2="16" y2="21"></line>
-                                        <line x1="12" y1="17" x2="12" y2="21"></line>
-                                    </svg>
-                                    <strong>{$dev->user_agent|truncate:40:"..."|default:'Browser Session'}</strong>
-                                </div>
-                                <div class="clv-device-meta">
-                                    <span>IP: {$dev->ip_address|default:'Unknown'}</span> &middot; 
-                                    <span>Expires: {$dev->expires_at|truncate:10:""}</span>
-                                </div>
-                            </div>
-                            <form method="post" action="{$devices_url}&action=revokedevice&device_id={$dev->id}">
-                                <input type="hidden" name="token" value="{$token}">
-                                <button type="submit" class="clv-btn-sm clv-btn-danger" onclick="return confirm('Revoke this device?');">{$lang.revoke|default:'Revoke'}</button>
-                            </form>
-                        </div>
-                    {/foreach}
-                </div>
-                <form method="post" action="{$devices_url}&action=revokealldevices" style="margin-top:16px;">
-                    <input type="hidden" name="token" value="{$token}">
-                    <button type="submit" class="clv-btn clv-btn-secondary" onclick="return confirm('Revoke all trusted devices?');">{$lang.revoke_all|default:'Revoke All Devices'}</button>
-                </form>
-            {else}
-                <p style="color:var(--clv-text-muted);font-size:14px;margin:20px 0;">{$lang.no_trusted_devices|default:'You currently have no trusted devices.'}</p>
-            {/if}
+            <!-- Backup Codes Section -->
+            <div class="clv-security-section">
+                <h3 class="clv-section-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                    {$lang.backup_codes_title|default:'Emergency Backup Codes'}
+                </h3>
+                
+                {if $new_backup_codes && count($new_backup_codes) > 0}
+                    <div class="clv-backup-codes-grid" id="clv_backup_codes_box">
+                        {foreach from=$new_backup_codes item=bcode}
+                            <div class="clv-backup-code-pill"><code>{$bcode}</code></div>
+                        {/foreach}
+                    </div>
 
-            <p class="clv-logout" style="margin-top:20px;">
+                    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+                        <button type="button" class="clv-btn-sm clv-btn-primary" onclick="clvCopyBackupCodes();">
+                            📋 {$lang.copy_codes|default:'Copy All'}
+                        </button>
+                        <button type="button" class="clv-btn-sm clv-btn-secondary" onclick="clvDownloadBackupCodes();">
+                            📥 {$lang.download_codes|default:'Download (.txt)'}
+                        </button>
+                        <button type="button" class="clv-btn-sm clv-btn-secondary" onclick="clvPrintBackupCodes();">
+                            🖨️ {$lang.print_codes|default:'Print'}
+                        </button>
+                    </div>
+                {else}
+                    <p style="font-size:13px;color:var(--clv-text-secondary);margin:6px 0 12px;text-align:left;">
+                        {if $remaining_backup_codes > 0}
+                            {$lang.backup_codes_count|replace:':count':$remaining_backup_codes|default:"You currently have `$remaining_backup_codes` active backup code(s) remaining."}
+                        {else}
+                            You have no active backup codes generated yet.
+                        {/if}
+                    </p>
+
+                    <form method="post" action="{$generate_codes_url}">
+                        <input type="hidden" name="token" value="{$token}">
+                        <button type="submit" class="clv-btn-sm clv-btn-primary" onclick="return confirm('{$lang.generate_codes_warn|default:'Generating new backup codes will invalidate any existing ones.'}');">
+                            🔑 {$lang.generate_codes|default:'Generate New Backup Codes'}
+                        </button>
+                    </form>
+                {/if}
+            </div>
+
+            <!-- Trusted Devices Section -->
+            <div class="clv-security-section" style="margin-top:24px;">
+                <h3 class="clv-section-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
+                    {$lang.trusted_devices_title|default:'Trusted Devices'}
+                </h3>
+
+                {if $client_devices && count($client_devices) > 0}
+                    <div class="clv-devices-list">
+                        {foreach from=$client_devices item=dev}
+                            <div class="clv-device-item">
+                                <div class="clv-device-info">
+                                    <div class="clv-device-name">
+                                        <strong>{$dev->user_agent|truncate:35:"..."|default:'Browser Session'}</strong>
+                                    </div>
+                                    <div class="clv-device-meta">
+                                        <span>IP: {$dev->ip_address|default:'Unknown'}</span> &middot; 
+                                        <span>Expires: {$dev->expires_at|truncate:10:""}</span>
+                                    </div>
+                                </div>
+                                <form method="post" action="{$devices_url}&action=revokedevice&device_id={$dev->id}">
+                                    <input type="hidden" name="token" value="{$token}">
+                                    <button type="submit" class="clv-btn-sm clv-btn-danger" onclick="return confirm('Revoke this device?');">{$lang.revoke|default:'Revoke'}</button>
+                                </form>
+                            </div>
+                        {/foreach}
+                    </div>
+                    <form method="post" action="{$devices_url}&action=revokealldevices" style="margin-top:10px;">
+                        <input type="hidden" name="token" value="{$token}">
+                        <button type="submit" class="clv-btn-sm clv-btn-secondary" onclick="return confirm('Revoke all trusted devices?');">{$lang.revoke_all|default:'Revoke All Devices'}</button>
+                    </form>
+                {else}
+                    <p style="color:var(--clv-text-muted);font-size:13px;margin:8px 0;text-align:left;">{$lang.no_trusted_devices|default:'You currently have no trusted devices.'}</p>
+                {/if}
+            </div>
+
+            <p class="clv-logout" style="margin-top:22px;">
                 <a href="{$back_url|default:'clientarea.php'}">&larr; Back to Client Area</a>
             </p>
 
@@ -334,14 +386,69 @@ body.lagom-layout-dark {
 .clv-logout a{color:var(--clv-text-muted);font-size:12.5px;text-decoration:none;transition:color .15s;}
 .clv-logout a:hover{color:var(--clv-text-primary);text-decoration:underline;}
 
-/* Devices List */
-.clv-devices-list{margin:16px 0;text-align:left;}
-.clv-device-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--clv-input-bg);border:1px solid var(--clv-card-border);border-radius:8px;margin-bottom:8px;}
-.clv-device-name{font-size:13.5px;color:var(--clv-text-primary);display:flex;align-items:center;gap:6px;}
-.clv-device-meta{font-size:12px;color:var(--clv-text-muted);margin-top:2px;}
+/* Devices & Backup Codes List */
+.clv-security-section{text-align:left;background:var(--clv-input-bg);border:1px solid var(--clv-card-border);border-radius:10px;padding:16px;margin-top:16px;}
+.clv-section-title{margin:0 0 8px;font-size:15px;font-weight:700;color:var(--clv-text-primary);display:flex;align-items:center;gap:8px;}
+.clv-backup-codes-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0;}
+.clv-backup-code-pill{background:var(--clv-card-bg);border:1px solid var(--clv-card-border);border-radius:6px;padding:8px 12px;text-align:center;}
+.clv-backup-code-pill code{font-size:15px;font-weight:700;letter-spacing:2px;color:var(--clv-text-primary);}
+.clv-devices-list{margin:12px 0 0;text-align:left;}
+.clv-device-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--clv-card-bg);border:1px solid var(--clv-card-border);border-radius:8px;margin-bottom:8px;}
+.clv-device-name{font-size:13px;color:var(--clv-text-primary);display:flex;align-items:center;gap:6px;}
+.clv-device-meta{font-size:11.5px;color:var(--clv-text-muted);margin-top:2px;}
 {/literal}</style>
 
 <script>{literal}
+function clvGetBackupCodesText() {
+    var box = document.getElementById('clv_backup_codes_box');
+    if (!box) return '';
+    var codes = [];
+    var pills = box.querySelectorAll('code');
+    pills.forEach(function(p) { codes.push(p.textContent.trim()); });
+    return "=== YOUR 2FA EMERGENCY BACKUP CODES ===\n\n" + codes.join("\n") + "\n\n* Each code can only be used once.\n* Keep these codes secure.";
+}
+
+function clvCopyBackupCodes() {
+    var txt = clvGetBackupCodesText();
+    if (!txt) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(function() {
+            alert('{/literal}{$lang.codes_copied|default:"Backup codes copied to clipboard!"}{literal}');
+        });
+    } else {
+        var ta = document.createElement('textarea');
+        ta.value = txt;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        alert('{/literal}{$lang.codes_copied|default:"Backup codes copied to clipboard!"}{literal}');
+    }
+}
+
+function clvDownloadBackupCodes() {
+    var txt = clvGetBackupCodesText();
+    if (!txt) return;
+    var blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '2fa-backup-codes.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+function clvPrintBackupCodes() {
+    var txt = clvGetBackupCodesText();
+    if (!txt) return;
+    var win = window.open('', 'PRINT', 'height=400,width=600');
+    win.document.write('<html><head><title>2FA Backup Codes</title></head><body><pre style="font-size:16px;line-height:1.6;">' + txt + '</pre></body></html>');
+    win.document.close();
+    win.focus();
+    win.print();
+    win.close();
+}
+
 (function(){
     var container = document.getElementById('clv_pin_container');
     var hiddenInput = document.getElementById('clv_code');

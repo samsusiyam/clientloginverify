@@ -177,3 +177,25 @@ add_hook('DailyCronJob', 1, function ($vars) {
         }
     }
 });
+
+/**
+ * Add 2FA / Login Security item under Client Area Account Menu.
+ */
+add_hook('ClientAreaSecondaryNavbar', 1, function ($secondaryNavbar) {
+    try {
+        if (!CLV::isEnabled()) {
+            return;
+        }
+        $accountMenu = $secondaryNavbar->getChild('Account');
+        if ($accountMenu) {
+            $accountMenu->addChild('ClientLoginVerifySecurity', array(
+                'label'   => 'Two-Factor / 2FA Security',
+                'uri'     => 'index.php?m=clientloginverify&action=security',
+                'order'   => 50,
+                'icon'    => 'fas fa-shield-alt',
+            ));
+        }
+    } catch (\Exception $e) {
+        // non fatal
+    }
+});

@@ -779,8 +779,8 @@ function clientloginverify_clientarea($vars)
     try {
         $action = isset($_REQUEST['action']) ? $_REQUEST['action'] : '';
 
-        // Device Management Page (for already verified clients)
-        if ($action === 'devices' || $action === 'revokedevice' || $action === 'revokealldevices') {
+        // Security Hub / Device Management / Backup Codes (for verified logged-in clients)
+        if ($action === 'security' || $action === 'devices' || $action === 'backupcodes' || $action === 'generatebackupcodes' || $action === 'revokedevice' || $action === 'revokealldevices') {
             if ($action === 'revokedevice' && isset($_REQUEST['device_id'])) {
                 $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
                 if ($tokenOk) {
@@ -793,21 +793,32 @@ function clientloginverify_clientarea($vars)
                     CLV::revokeAllDevices($clientId);
                     $base['vars']['info'] = isset($lang['device_revoked']) ? $lang['device_revoked'] : 'All trusted devices have been revoked.';
                 }
+            } elseif ($action === 'generatebackupcodes') {
+                $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
+                if ($tokenOk) {
+                    $newCodes = CLV::generateBackupCodes($clientId);
+                    $base['vars']['new_backup_codes'] = $newCodes;
+                    $base['vars']['info'] = isset($lang['save_codes_warning']) ? $lang['save_codes_warning'] : 'Save these codes in a safe place. They will not be shown again.';
+                }
             }
 
-            $base['vars']['view_mode']      = 'devices';
-            $base['vars']['client_devices'] = CLV::clientDevices($clientId);
-            $base['vars']['token']          = function_exists('generate_token') ? generate_token('plain') : '';
-            $base['vars']['devices_url']    = CLV::systemUrl('index.php?m=clientloginverify&action=devices');
-            $base['vars']['back_url']       = CLV::systemUrl('clientarea.php');
+            $base['vars']['view_mode']              = 'security';
+            $base['vars']['client_devices']         = CLV::clientDevices($clientId);
+            $base['vars']['remaining_backup_codes'] = CLV::remainingBackupCodesCount($clientId);
+            $base['vars']['token']                  = function_exists('generate_token') ? generate_token('plain') : '';
+            $base['vars']['security_url']           = CLV::systemUrl('index.php?m=clientloginverify&action=security');
+            $base['vars']['generate_codes_url']     = CLV::systemUrl('index.php?m=clientloginverify&action=generatebackupcodes');
+            $base['vars']['devices_url']            = CLV::systemUrl('index.php?m=clientloginverify&action=devices');
+            $base['vars']['back_url']               = CLV::systemUrl('clientarea.php');
             return $base;
         }
 
         // Not on the dedicated verify page: nothing to render here.
         if (!CLV::isVerifyPage()) {
-            $base['vars']['normalview'] = true;
-            $base['vars']['logout_url'] = CLV::systemUrl('clientarea.php');
-            $base['vars']['devices_url'] = CLV::systemUrl('index.php?m=clientloginverify&action=devices');
+            $base['vars']['normalview']   = true;
+            $base['vars']['logout_url']   = CLV::systemUrl('clientarea.php');
+            $base['vars']['security_url'] = CLV::systemUrl('index.php?m=clientloginverify&action=security');
+            $base['vars']['devices_url']  = CLV::systemUrl('index.php?m=clientloginverify&action=devices');
             return $base;
         }
 
