@@ -10,18 +10,23 @@ entered, protecting accounts even if a password is stolen.
 
 - Email delivered 6 digit codes (configurable 4-8 digits), hashed at rest.
 - Codes expire (default 5 minutes) and lock after a configurable number of attempts.
+- **Remember This Device (Trusted Devices)**: Allow clients to trust their browser for X days (default 30 days) and bypass 2FA on subsequent logins.
+- **Live Resend Countdown Timer**: Interactive frontend timer on the verification screen showing real-time remaining cooldown seconds.
+- **Multilingual Support**: Fully localized with English and Bengali (`lang/english.php`, `lang/bengali.php`, `lang/bangla.php`) with dynamic language detection.
+- **Deep Link / Return URL Retention**: Preserves the client's destination page after successful verification.
 - Per-IP brute force throttle across all accounts (50 failures / 15 minutes).
 - Resend with cooldown and a maximum resend limit, enforced atomically.
 - Force mode (all clients) or opt-in mode (only enabled clients).
 - Per-client enable/disable and excluded client groups.
-- Admin dashboard, in-page settings editor, client manager and filterable logs.
-- CSRF protected admin and client forms; session id regenerated after success.
+- Admin dashboard, in-page settings editor, client manager with search and filterable logs with pagination.
+- CSRF protected admin and client forms.
+- Modern SVG UI with responsive light/dark theme support.
 - Fail closed: if the email cannot be sent the client stays locked out (see below).
 
 ## Requirements
 
-- WHMCS 7.0+ (uses the addon module system and Capsule ORM).
-- PHP 7.2 or newer (tested against PHP 8.3 / cPanel ea-php83).
+- WHMCS 7.0+ / 8.x (uses the addon module system and Capsule ORM).
+- PHP 7.2 or newer (tested against PHP 8.1, 8.2, 8.3).
 
 ## Installation
 
@@ -47,6 +52,8 @@ If you upgraded from an older version, clear the template cache:
 | Maximum Attempts | 5 | 1-10 before the code locks. |
 | Resend Cooldown (seconds) | 60 | 0-600. |
 | Maximum Resends | 3 | 0-10. |
+| Remember Device | on | Allow clients to trust their browser. |
+| Device Trust Days | 30 | 1-365 days. |
 | Email Template | Client Login Verification | Created automatically on activation. |
 | Log Attempts | on | Enables the Logs tab. |
 | Log IP Address | on | Required for the per-IP throttle. |

@@ -18,9 +18,8 @@ if (!defined('WHMCS')) {
 require_once __DIR__ . '/lib/clv_helper.php';
 
 /**
- * After a correct password: create a code, email it, and send the client to
- * the verification page. Fail closed - if anything goes wrong the client is
- * still redirected to the locked verify page rather than into the account.
+ * After a correct password: check trusted device, create a code, email it,
+ * and send the client to the verification page. Fail closed.
  */
 add_hook('ClientLogin', 1, function ($vars) {
     try {
@@ -52,6 +51,19 @@ add_hook('ClientLogin', 1, function ($vars) {
             return;
         }
 
+        // Check if this browser/device is already trusted
+        if (CLV::isDeviceTrusted($clientId)) {
+            CLV::markPassed($clientId);
+            return;
+        }
+
+        // Capture intended return URL before redirecting to 2FA
+        if (!empty($_SESSION['loginurlredirect'])) {
+            CLV::sessionSet('clv_return_url', (string) $_SESSION['loginurlredirect']);
+        } elseif (!empty($_REQUEST['returnUrl'])) {
+            CLV::sessionSet('clv_return_url', (string) $_REQUEST['returnUrl']);
+        }
+
         CLV::sessionSet('clv_passed', false);
         CLV::sessionSet('clv_pending_client', $clientId);
         // Bind the (not yet granted) pass to this specific client so a stale
@@ -64,7 +76,9 @@ add_hook('ClientLogin', 1, function ($vars) {
             CLV::log($clientId, 'otp_sent', 'Verification code emailed');
         } else {
             CLV::log($clientId, 'email_failed', 'Failed to send verification email at login');
-            CLV::sessionSet('clv_email_error', 'We could not send your verification email. Please use "Resend code" or contact support.');
+            $lang = CLV::loadLang();
+            $msg  = isset($lang['email_failed']) ? $lang['email_failed'] : 'We could not send your verification email. Please use "Resend Code" or contact support.';
+            CLV::sessionSet('clv_email_error', $msg);
         }
 
         // Opportunistic cleanup (~1%) so the tables stay tidy even if cron is off.
@@ -98,8 +112,20 @@ add_hook('ClientAreaPage', 1, function ($vars) {
         if (CLV::passedFor($clientId)) {
             return;
         }
+        if (CLV::isDeviceTrusted($clientId)) {
+            CLV::markPassed($clientId);
+            return;
+        }
         if (!CLV::requires2FA($clientId)) {
             return;
+        }
+
+        // Save current page URL as return target if not already set
+        if (!CLV::sessionGet('clv_return_url') && isset($_SERVER['REQUEST_URI'])) {
+            $uri = (string) $_SERVER['REQUEST_URI'];
+            if (strpos($uri, 'clvverify=1') === false && strpos($uri, 'logout.php') === false) {
+                CLV::sessionSet('clv_return_url', $uri);
+            }
         }
 
         CLV::redirect(CLV::verifyUrl());
@@ -129,8 +155,10 @@ add_hook('ClientLogout', 1, function ($vars) {
 
     CLV::sessionForget('clv_passed');
     CLV::sessionForget('clv_passed_uid');
+    CLV::sessionForget('clv_passed_sid');
     CLV::sessionForget('clv_pending_client');
     CLV::sessionForget('clv_email_error');
+    CLV::sessionForget('clv_return_url');
 
     if (function_exists('session_regenerate_id')) {
         @session_regenerate_id(true);

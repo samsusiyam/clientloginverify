@@ -59,64 +59,76 @@ function clientloginverify_config()
 }
 
 /**
- * Create the database tables and the email template. Uses WHMCS native DB
- * functions because Capsule is not guaranteed to be available during activate.
+ * Create the database tables and the email template using Capsule ORM.
  */
 function clientloginverify_activate()
 {
     try {
-        $tables = array(
-            "CREATE TABLE IF NOT EXISTS `mod_clientloginverify_codes` (
-                `id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
-                `user_id` INT(10) UNSIGNED DEFAULT NULL,
-                `client_id` INT(10) UNSIGNED NOT NULL,
-                `otp_hash` VARCHAR(255) NOT NULL,
-                `expires_at` DATETIME NOT NULL,
-                `attempts` INT(10) UNSIGNED NOT NULL DEFAULT 0,
-                `max_attempts` INT(10) UNSIGNED NOT NULL DEFAULT 5,
-                `resends` INT(10) UNSIGNED NOT NULL DEFAULT 0,
-                `ip_address` VARCHAR(45) DEFAULT NULL,
-                `user_agent` VARCHAR(500) DEFAULT NULL,
-                `verified_at` DATETIME DEFAULT NULL,
-                `created_at` DATETIME DEFAULT NULL,
-                PRIMARY KEY (`id`),
-                KEY `client_pending` (`client_id`, `verified_at`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+        $schema = \WHMCS\Database\Capsule::schema();
 
-            "CREATE TABLE IF NOT EXISTS `mod_clientloginverify_logs` (
-                `id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
-                `client_id` INT(10) UNSIGNED DEFAULT NULL,
-                `event` VARCHAR(50) NOT NULL,
-                `ip` VARCHAR(45) DEFAULT NULL,
-                `user_agent` VARCHAR(500) DEFAULT NULL,
-                `message` VARCHAR(500) DEFAULT NULL,
-                `created_at` DATETIME DEFAULT NULL,
-                PRIMARY KEY (`id`),
-                KEY `client_id` (`client_id`),
-                KEY `ip_time` (`ip`, `created_at`),
-                KEY `event_time` (`event`, `created_at`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+        if (!$schema->hasTable(CLV::T_CODES)) {
+            $schema->create(CLV::T_CODES, function ($table) {
+                $table->increments('id');
+                $table->unsignedInteger('user_id')->nullable();
+                $table->unsignedInteger('client_id');
+                $table->string('otp_hash', 255);
+                $table->dateTime('expires_at');
+                $table->unsignedInteger('attempts')->default(0);
+                $table->unsignedInteger('max_attempts')->default(5);
+                $table->unsignedInteger('resends')->default(0);
+                $table->string('ip_address', 45)->nullable();
+                $table->string('user_agent', 500)->nullable();
+                $table->dateTime('verified_at')->nullable();
+                $table->dateTime('created_at')->nullable();
+                $table->index(array('client_id', 'verified_at'), 'client_pending');
+            });
+        }
 
-            "CREATE TABLE IF NOT EXISTS `mod_clientloginverify_settings` (
-                `id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
-                `client_id` INT(10) UNSIGNED NOT NULL,
-                `setting` VARCHAR(50) NOT NULL,
-                `value` VARCHAR(255) DEFAULT NULL,
-                `created_at` DATETIME DEFAULT NULL,
-                PRIMARY KEY (`id`),
-                UNIQUE KEY `client_setting` (`client_id`, `setting`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-        );
+        if (!$schema->hasTable(CLV::T_LOGS)) {
+            $schema->create(CLV::T_LOGS, function ($table) {
+                $table->increments('id');
+                $table->unsignedInteger('client_id')->nullable();
+                $table->string('event', 50);
+                $table->string('ip', 45)->nullable();
+                $table->string('user_agent', 500)->nullable();
+                $table->string('message', 500)->nullable();
+                $table->dateTime('created_at')->nullable();
+                $table->index('client_id', 'client_id');
+                $table->index(array('ip', 'created_at'), 'ip_time');
+                $table->index(array('event', 'created_at'), 'event_time');
+            });
+        }
 
-        foreach ($tables as $sql) {
-            full_query($sql);
+        if (!$schema->hasTable(CLV::T_SETTINGS)) {
+            $schema->create(CLV::T_SETTINGS, function ($table) {
+                $table->increments('id');
+                $table->unsignedInteger('client_id');
+                $table->string('setting', 50);
+                $table->string('value', 255)->nullable();
+                $table->dateTime('created_at')->nullable();
+                $table->unique(array('client_id', 'setting'), 'client_setting');
+            });
+        }
+
+        if (!$schema->hasTable(CLV::T_DEVICES)) {
+            $schema->create(CLV::T_DEVICES, function ($table) {
+                $table->increments('id');
+                $table->unsignedInteger('client_id');
+                $table->string('token_hash', 64);
+                $table->string('ip_address', 45)->nullable();
+                $table->string('user_agent', 500)->nullable();
+                $table->dateTime('expires_at');
+                $table->dateTime('created_at')->nullable();
+                $table->index(array('client_id', 'token_hash'), 'client_token');
+                $table->index('expires_at', 'expires_at');
+            });
         }
 
         clientloginverify_create_email_template();
 
         return array(
             'status'      => 'success',
-            'description' => 'Client Login Verify activated. Tables and the email template are ready.',
+            'description' => 'Client Login Verify activated. Tables and email template are ready.',
         );
     } catch (\Exception $e) {
         return array(
@@ -153,39 +165,43 @@ function clientloginverify_create_email_template()
 {
     $name = 'Client Login Verification';
 
-    $existing = select_query('tblemailtemplates', 'id', array(
-        'name' => $name,
-        'type' => 'general',
-    ));
-    if ($existing && function_exists('mysql_num_rows') && mysql_num_rows($existing) > 0) {
-        return;
+    try {
+        $exists = \WHMCS\Database\Capsule::table('tblemailtemplates')
+            ->where('name', $name)
+            ->exists();
+
+        if ($exists) {
+            return;
+        }
+
+        $message = "<p>Hello {\$client_name},</p>"
+            . "<p>A login to your account was requested. Use the verification code below to continue:</p>"
+            . "<p style=\"font-size:26px;font-weight:bold;letter-spacing:4px;\">{\$clv_code}</p>"
+            . "<p>This code expires in {\$clv_expiry} minutes.</p>"
+            . "<p><strong>Request details</strong><br>"
+            . "Time: {\$clv_datetime}<br>"
+            . "IP address: {\$clv_ip}<br>"
+            . "Browser: {\$clv_browser}<br>"
+            . "Operating system: {\$clv_os}</p>"
+            . "<p>If you did not try to log in, please change your password immediately.</p>"
+            . "<p>Regards,<br>{\$company_name}</p>";
+
+        \WHMCS\Database\Capsule::table('tblemailtemplates')->insert(array(
+            'type'      => 'general',
+            'name'      => $name,
+            'subject'   => 'Your login verification code',
+            'message'   => $message,
+            'fromname'  => '',
+            'fromemail' => '',
+            'disabled'  => 0,
+            'custom'    => 1,
+            'language'  => '',
+            'copyto'    => '',
+            'plaintext' => 0,
+        ));
+    } catch (\Exception $e) {
+        // non-fatal
     }
-
-    $message = "<p>Hello {\$client_name},</p>"
-        . "<p>A login to your account was requested. Use the verification code below to continue:</p>"
-        . "<p style=\"font-size:26px;font-weight:bold;letter-spacing:4px;\">{\$clv_code}</p>"
-        . "<p>This code expires in {\$clv_expiry} minutes.</p>"
-        . "<p><strong>Request details</strong><br>"
-        . "Time: {\$clv_datetime}<br>"
-        . "IP address: {\$clv_ip}<br>"
-        . "Browser: {\$clv_browser}<br>"
-        . "Operating system: {\$clv_os}</p>"
-        . "<p>If you did not try to log in, please change your password immediately.</p>"
-        . "<p>Regards,<br>{\$company_name}</p>";
-
-    insert_query('tblemailtemplates', array(
-        'type'     => 'general',
-        'name'     => $name,
-        'subject'  => 'Your login verification code',
-        'message'  => $message,
-        'fromname' => '',
-        'fromemail' => '',
-        'disabled' => 0,
-        'custom'   => 1,
-        'language' => '',
-        'copyto'   => '',
-        'plaintext' => 0,
-    ));
 }
 
 /* ======================================================================
@@ -410,6 +426,7 @@ function clientloginverify_view_settings($modulelink)
 function clientloginverify_view_clients($modulelink)
 {
     $token  = clientloginverify_admin_token();
+    $tokVal = clientloginverify_token_value();
     $search = isset($_GET['q']) ? trim($_GET['q']) : '';
     $page   = isset($_GET['p']) ? max(1, (int) $_GET['p']) : 1;
     $per    = 25;
@@ -437,7 +454,7 @@ function clientloginverify_view_clients($modulelink)
         $total = 0;
     }
 
-    $html  = '<form method="get" action="' . htmlspecialchars($_SERVER['PHP_SELF']) . '" style="margin-bottom:12px;">';
+    $html  = '<form method="get" action="' . htmlspecialchars($_SERVER['PHP_SELF']) . '" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">';
     // Preserve WHMCS module routing params.
     $html .= '<input type="hidden" name="module" value="clientloginverify">';
     $html .= '<input type="hidden" name="view" value="clients">';
@@ -453,25 +470,25 @@ function clientloginverify_view_clients($modulelink)
     }
 
     $html .= '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">';
-    $html .= '<thead><tr><th>ID</th><th>Name</th><th>Group</th><th>2FA status</th><th>Actions</th></tr></thead><tbody>';
+    $html .= '<thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Group</th><th>2FA status</th><th>Actions</th></tr></thead><tbody>';
 
     foreach ($rows as $c) {
         $override  = CLV::clientOverride($c->id);
         $required  = CLV::requires2FA($c->id);
-        $stateText = $required ? 'Required' : 'Not required';
+        $stateText = $required ? '<span style="color:#1e7e34;font-weight:600;">Required</span>' : '<span style="color:#777;">Not required</span>';
         $overText  = ($override === null) ? 'default' : $override;
         $next      = ($override === 'off') ? 'on' : 'off';
         $label     = ($override === 'off') ? 'Enable 2FA' : 'Disable 2FA';
 
         $name = trim($c->firstname . ' ' . $c->lastname);
-        $html .= '<tr><td>' . (int) $c->id . '</td><td>' . htmlspecialchars($name) . '</td><td>'
-            . (int) $c->groupid . '</td><td>' . htmlspecialchars($stateText) . ' <span style="color:#999;">(' . htmlspecialchars($overText) . ')</span></td><td>';
+        $html .= '<tr><td>' . (int) $c->id . '</td><td>' . htmlspecialchars($name) . '</td><td>' . htmlspecialchars($c->email) . '</td><td>'
+            . (int) $c->groupid . '</td><td>' . $stateText . ' <span style="color:#999;font-size:12px;">(' . htmlspecialchars($overText) . ')</span></td><td>';
         $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink)
             . '&view=clients&action=toggleclient&client_id=' . (int) $c->id . '&val=' . $next
-            . '&token=' . urlencode(clientloginverify_token_value()) . '">' . $label . '</a> ';
+            . '&token=' . urlencode($tokVal) . '">' . $label . '</a> ';
         $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink)
             . '&view=clients&action=clearcode&client_id=' . (int) $c->id
-            . '&token=' . urlencode(clientloginverify_token_value()) . '">Clear pending code</a>';
+            . '&token=' . urlencode($tokVal) . '">Clear pending code</a>';
         $html .= '</td></tr>';
     }
     $html .= '</tbody></table>';
@@ -479,15 +496,36 @@ function clientloginverify_view_clients($modulelink)
     // Pagination
     $pages = (int) ceil($total / $per);
     if ($pages > 1) {
-        $html .= '<div style="margin-top:12px;">';
-        for ($i = 1; $i <= $pages; $i++) {
-            if ($i === $page) {
-                $html .= '<strong style="margin:0 4px;">' . $i . '</strong>';
-            } else {
-                $q = ($search !== '') ? '&q=' . urlencode($search) : '';
-                $html .= '<a style="margin:0 4px;" href="' . htmlspecialchars($modulelink) . '&view=clients&p=' . $i . $q . '">' . $i . '</a>';
+        $q = ($search !== '') ? '&q=' . urlencode($search) : '';
+        $html .= '<div style="margin-top:14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">';
+        if ($page > 1) {
+            $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=clients&p=' . ($page - 1) . $q . '">&laquo; Prev</a>';
+        }
+        $start = max(1, $page - 3);
+        $end   = min($pages, $page + 3);
+        if ($start > 1) {
+            $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=clients&p=1' . $q . '">1</a>';
+            if ($start > 2) {
+                $html .= '<span style="padding:0 4px;">...</span>';
             }
         }
+        for ($i = $start; $i <= $end; $i++) {
+            if ($i === $page) {
+                $html .= '<span class="btn btn-xs btn-primary"><strong>' . $i . '</strong></span>';
+            } else {
+                $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=clients&p=' . $i . $q . '">' . $i . '</a>';
+            }
+        }
+        if ($end < $pages) {
+            if ($end < $pages - 1) {
+                $html .= '<span style="padding:0 4px;">...</span>';
+            }
+            $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=clients&p=' . $pages . $q . '">' . $pages . '</a>';
+        }
+        if ($page < $pages) {
+            $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=clients&p=' . ($page + 1) . $q . '">Next &raquo;</a>';
+        }
+        $html .= '<span style="color:#777;font-size:12px;margin-left:8px;">Page ' . $page . ' of ' . $pages . ' (' . $total . ' clients)</span>';
         $html .= '</div>';
     }
 
@@ -495,23 +533,19 @@ function clientloginverify_view_clients($modulelink)
 }
 
 /**
- * The link-token value only (used inside anchor hrefs). generate_token('link')
- * returns a full hidden input, so for links we need just the raw value.
+ * Raw CSRF token value used inside anchor href links.
  */
 function clientloginverify_token_value()
 {
     if (!function_exists('generate_token')) {
         return '';
     }
-    $field = generate_token('link');
-    if (preg_match('/value="([^"]+)"/', $field, $m)) {
-        return $m[1];
-    }
-    return '';
+    return generate_token('plain');
 }
 
 function clientloginverify_view_logs($modulelink)
 {
+    $tokVal = clientloginverify_token_value();
     $event  = isset($_GET['event']) ? preg_replace('/[^a-z_]/', '', strtolower($_GET['event'])) : '';
     $client = isset($_GET['client']) ? (int) $_GET['client'] : 0;
     $page   = isset($_GET['p']) ? max(1, (int) $_GET['p']) : 1;
@@ -535,10 +569,19 @@ function clientloginverify_view_logs($modulelink)
         $total = 0;
     }
 
-    $html  = '<form method="get" action="' . htmlspecialchars($_SERVER['PHP_SELF']) . '" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">';
+    $html  = '<form method="get" action="' . htmlspecialchars($_SERVER['PHP_SELF']) . '" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
     $html .= '<input type="hidden" name="module" value="clientloginverify">';
     $html .= '<input type="hidden" name="view" value="logs">';
-    $events = array('' => 'All events', 'otp_sent' => 'Code sent', 'verified' => 'Verified', 'failed' => 'Failed', 'resent' => 'Resent', 'email_failed' => 'Email failed', 'throttled' => 'Throttled');
+    $events = array(
+        ''              => 'All events',
+        'otp_sent'      => 'Code sent',
+        'verified'      => 'Verified',
+        'failed'        => 'Failed',
+        'resent'        => 'Resent',
+        'email_failed'  => 'Email failed',
+        'throttled'     => 'Throttled',
+        'device_trusted'=> 'Device trusted',
+    );
     $html .= '<select name="event">';
     foreach ($events as $val => $label) {
         $sel = ($event === $val) ? ' selected' : '';
@@ -554,15 +597,12 @@ function clientloginverify_view_logs($modulelink)
         return $html . '<p style="color:#777;">No log entries match your filter.</p>';
     }
 
-    // Clear-logs button (honours the active filter). JS confirm prevents an
-    // accidental bulk delete.
-    $tok       = clientloginverify_token_value();
     $clearHref = htmlspecialchars($modulelink) . '&view=logs&action=clearlogs'
         . ($event !== '' ? '&event=' . urlencode($event) : '')
         . ($client > 0 ? '&client=' . $client : '')
-        . '&token=' . urlencode($tok);
+        . '&token=' . urlencode($tokVal);
     $clearLabel = ($event !== '' || $client > 0) ? 'Delete filtered logs' : 'Delete all logs';
-    $html .= '<p><a class="btn btn-danger" href="' . $clearHref . '" '
+    $html .= '<p><a class="btn btn-danger btn-sm" href="' . $clearHref . '" '
         . 'onclick="return confirm(\'Delete these log entries? This cannot be undone.\');">'
         . htmlspecialchars($clearLabel) . '</a></p>';
 
@@ -572,7 +612,7 @@ function clientloginverify_view_logs($modulelink)
         $delHref = htmlspecialchars($modulelink) . '&view=logs&action=deletelog&log_id=' . (int) $r->id
             . ($event !== '' ? '&event=' . urlencode($event) : '')
             . ($client > 0 ? '&client=' . $client : '')
-            . '&token=' . urlencode($tok);
+            . '&token=' . urlencode($tokVal);
         $html .= '<tr><td>' . (int) $r->id . '</td><td>' . (int) $r->client_id . '</td><td>' . htmlspecialchars($r->event)
             . '</td><td>' . htmlspecialchars((string) $r->ip) . '</td><td>' . htmlspecialchars((string) $r->message)
             . '</td><td>' . htmlspecialchars((string) $r->created_at) . '</td>'
@@ -583,15 +623,36 @@ function clientloginverify_view_logs($modulelink)
 
     $pages = (int) ceil($total / $per);
     if ($pages > 1) {
-        $html .= '<div style="margin-top:12px;">';
         $extra = ($event !== '' ? '&event=' . urlencode($event) : '') . ($client > 0 ? '&client=' . $client : '');
-        for ($i = 1; $i <= $pages && $i <= 50; $i++) {
-            if ($i === $page) {
-                $html .= '<strong style="margin:0 4px;">' . $i . '</strong>';
-            } else {
-                $html .= '<a style="margin:0 4px;" href="' . htmlspecialchars($modulelink) . '&view=logs&p=' . $i . $extra . '">' . $i . '</a>';
+        $html .= '<div style="margin-top:14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">';
+        if ($page > 1) {
+            $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=logs&p=' . ($page - 1) . $extra . '">&laquo; Prev</a>';
+        }
+        $start = max(1, $page - 3);
+        $end   = min($pages, $page + 3);
+        if ($start > 1) {
+            $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=logs&p=1' . $extra . '">1</a>';
+            if ($start > 2) {
+                $html .= '<span style="padding:0 4px;">...</span>';
             }
         }
+        for ($i = $start; $i <= $end; $i++) {
+            if ($i === $page) {
+                $html .= '<span class="btn btn-xs btn-primary"><strong>' . $i . '</strong></span>';
+            } else {
+                $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=logs&p=' . $i . $extra . '">' . $i . '</a>';
+            }
+        }
+        if ($end < $pages) {
+            if ($end < $pages - 1) {
+                $html .= '<span style="padding:0 4px;">...</span>';
+            }
+            $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=logs&p=' . $pages . $extra . '">' . $pages . '</a>';
+        }
+        if ($page < $pages) {
+            $html .= '<a class="btn btn-xs btn-default" href="' . htmlspecialchars($modulelink) . '&view=logs&p=' . ($page + 1) . $extra . '">Next &raquo;</a>';
+        }
+        $html .= '<span style="color:#777;font-size:12px;margin-left:8px;">Page ' . $page . ' of ' . $pages . ' (' . $total . ' entries)</span>';
         $html .= '</div>';
     }
 
@@ -604,11 +665,7 @@ function clientloginverify_view_logs($modulelink)
 
 function clientloginverify_clientarea($vars)
 {
-    $lang = array();
-    $langFile = __DIR__ . '/lang/english.php';
-    if (is_file($langFile)) {
-        include $langFile;
-    }
+    $lang = CLV::loadLang();
 
     $base = array(
         'pagetitle'    => isset($lang['title']) ? $lang['title'] : 'Verify Your Login',
@@ -632,14 +689,18 @@ function clientloginverify_clientarea($vars)
             return $base;
         }
 
-        // Already verified, or 2FA not required for this client: let them in.
-        if (!CLV::requires2FA($clientId) || CLV::passedFor($clientId)) {
-            CLV::redirect(CLV::systemUrl('clientarea.php'));
+        // Check if device is trusted or already passed or 2FA not required
+        if (CLV::isDeviceTrusted($clientId) || !CLV::requires2FA($clientId) || CLV::passedFor($clientId)) {
+            CLV::markPassed($clientId);
+            $returnUrl = CLV::sessionGet('clv_return_url');
+            if (!$returnUrl && !empty($_SESSION['loginurlredirect'])) {
+                $returnUrl = $_SESSION['loginurlredirect'];
+            }
+            CLV::sessionForget('clv_return_url');
+            CLV::redirect($returnUrl ? $returnUrl : CLV::systemUrl('clientarea.php'));
         }
 
-        // Ensure there is always a live code so the form can render. If none is
-        // pending (expired, cleared, or the page was opened directly) issue a
-        // fresh one and email it rather than bouncing the client to logout.
+        // Ensure there is always a live code so the form can render.
         if (!CLV::hasPendingCode($clientId)) {
             $code = CLV::issueCode($clientId);
             if (CLV::sendCode($clientId, $code)) {
@@ -647,7 +708,7 @@ function clientloginverify_clientarea($vars)
                 $base['vars']['info'] = isset($lang['code_resent']) ? $lang['code_resent'] : 'A verification code has been sent to your email.';
             } else {
                 CLV::log($clientId, 'email_failed', 'Failed to auto-issue verification email');
-                $base['vars']['error'] = 'We could not send your verification email. Please use "Resend code" or contact support.';
+                $base['vars']['error'] = isset($lang['email_failed']) ? $lang['email_failed'] : 'We could not send your verification email. Please use "Resend Code" or contact support.';
             }
         }
 
@@ -656,20 +717,25 @@ function clientloginverify_clientarea($vars)
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
             if (!$tokenOk) {
-                $base['vars']['error'] = 'Your session has expired. Please try again.';
+                $base['vars']['error'] = isset($lang['session_expired']) ? $lang['session_expired'] : 'Your session has expired. Please try again.';
             } elseif (isset($_GET['action']) && $_GET['action'] === 'resend') {
                 $res = CLV::resendCode($clientId);
                 $base['vars'][$res['success'] ? 'info' : 'error'] = $res['message'];
             } elseif (isset($_POST['clv_code'])) {
                 $res = CLV::verifyCode($clientId, $_POST['clv_code']);
                 if ($res['success']) {
-                    // Mark passed for THIS client and session. We intentionally
-                    // do NOT call session_regenerate_id() here: WHMCS 8.x manages
-                    // its own session/login token, and regenerating the raw PHP
-                    // session id drops the logged-in state, bouncing the client
-                    // back to the login page right after a correct code.
+                    if (!empty($_POST['trust_device']) && $_POST['trust_device'] === 'on') {
+                        CLV::trustDevice($clientId);
+                    }
                     CLV::markPassed($clientId);
-                    CLV::redirect(CLV::systemUrl('clientarea.php'));
+
+                    $returnUrl = CLV::sessionGet('clv_return_url');
+                    if (!$returnUrl && !empty($_SESSION['loginurlredirect'])) {
+                        $returnUrl = $_SESSION['loginurlredirect'];
+                    }
+                    CLV::sessionForget('clv_return_url');
+
+                    CLV::redirect($returnUrl ? $returnUrl : CLV::systemUrl('clientarea.php'));
                 }
                 $base['vars']['error'] = $res['message'];
             }
@@ -684,17 +750,26 @@ function clientloginverify_clientarea($vars)
             }
         }
 
-        $base['vars']['token']      = function_exists('generate_token') ? generate_token('plain') : '';
-        $base['vars']['otp_length'] = $otpLength;
-        $base['vars']['verify_url'] = CLV::verifyUrl();
-        $base['vars']['resend_url'] = CLV::verifyUrl() . '&action=resend';
-        $base['vars']['logout_url'] = CLV::systemUrl('logout.php');
+        $rememberDays = (int) CLV::setting('rememberDays', 30);
+        $rememberLabel = isset($lang['remember_device']) ? str_replace(':days', (string) $rememberDays, $lang['remember_device']) : ('Trust this device for ' . $rememberDays . ' days');
+
+        $base['vars']['token']                  = function_exists('generate_token') ? generate_token('plain') : '';
+        $base['vars']['otp_length']             = $otpLength;
+        $base['vars']['verify_url']             = CLV::verifyUrl();
+        $base['vars']['resend_url']             = CLV::verifyUrl() . '&action=resend';
+        $base['vars']['logout_url']             = CLV::systemUrl('logout.php');
+        $base['vars']['cooldown_remaining']     = CLV::resendCooldownRemaining($clientId);
+        $base['vars']['remember_device_enabled'] = (CLV::setting('rememberDevice') === 'on');
+        $base['vars']['remember_days']          = $rememberDays;
+        $base['vars']['remember_label']         = $rememberLabel;
     } catch (\Exception $e) {
-        $base['vars']['error'] = 'An unexpected error occurred. Please try again or contact support.';
-        $base['vars']['token'] = function_exists('generate_token') ? generate_token('plain') : '';
-        $base['vars']['verify_url'] = CLV::verifyUrl();
-        $base['vars']['resend_url'] = CLV::verifyUrl() . '&action=resend';
-        $base['vars']['logout_url'] = CLV::systemUrl('logout.php');
+        $base['vars']['error']                  = 'An unexpected error occurred. Please try again or contact support.';
+        $base['vars']['token']                  = function_exists('generate_token') ? generate_token('plain') : '';
+        $base['vars']['verify_url']             = CLV::verifyUrl();
+        $base['vars']['resend_url']             = CLV::verifyUrl() . '&action=resend';
+        $base['vars']['logout_url']             = CLV::systemUrl('logout.php');
+        $base['vars']['cooldown_remaining']     = 0;
+        $base['vars']['remember_device_enabled'] = false;
     }
 
     return $base;

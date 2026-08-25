@@ -35,6 +35,10 @@ class CLV
     const T_CODES    = 'mod_clientloginverify_codes';
     const T_LOGS     = 'mod_clientloginverify_logs';
     const T_SETTINGS = 'mod_clientloginverify_settings';
+    const T_DEVICES  = 'mod_clientloginverify_devices';
+
+    /** Cookie name for trusted device */
+    const COOKIE_DEVICE = 'clv_trusted_device';
 
     /** Per-IP failure throttle */
     const IP_WINDOW_MINUTES = 15;
@@ -110,6 +114,20 @@ class CLV
                 'desc'    => 'How many times a client may resend a code (0-10).',
                 'min'     => 0,
                 'max'     => 10,
+            ),
+            'rememberDevice' => array(
+                'label'   => 'Remember Device',
+                'type'    => 'yesno',
+                'default' => 'on',
+                'desc'    => 'Allow clients to trust their browser/device and skip 2FA for a set period.',
+            ),
+            'rememberDays' => array(
+                'label'   => 'Device Trust Days',
+                'type'    => 'text',
+                'default' => '30',
+                'desc'    => 'Number of days a trusted device bypasses 2FA (1-365).',
+                'min'     => 1,
+                'max'     => 365,
             ),
             'emailTemplate' => array(
                 'label'   => 'Email Template',
@@ -256,6 +274,13 @@ class CLV
     {
         $date = self::now();
         $date->modify('+' . (int) $minutes . ' minutes');
+        return $date->format('Y-m-d H:i:s');
+    }
+
+    public static function dbPlusDays($days)
+    {
+        $date = self::now();
+        $date->modify('+' . (int) $days . ' days');
         return $date->format('Y-m-d H:i:s');
     }
 
@@ -726,6 +751,28 @@ class CLV
     }
 
     /**
+     * Get remaining cooldown seconds before a resend is allowed.
+     */
+    public static function resendCooldownRemaining($clientId)
+    {
+        $row = self::pendingCode($clientId);
+        if (!$row) {
+            return 0;
+        }
+        $cooldown = (int) self::setting('resendCooldown');
+        if ($cooldown <= 0) {
+            return 0;
+        }
+        $createdAt = \DateTime::createFromFormat('Y-m-d H:i:s', (string) $row->created_at, new \DateTimeZone('UTC'));
+        if (!$createdAt) {
+            return 0;
+        }
+        $elapsed = self::now()->getTimestamp() - $createdAt->getTimestamp();
+        $remaining = $cooldown - $elapsed;
+        return ($remaining > 0) ? (int) $remaining : 0;
+    }
+
+    /**
      * Resend the pending code. The cooldown and resend cap are enforced inside
      * a single conditional UPDATE, so concurrent clicks cannot both succeed.
      */
@@ -747,18 +794,22 @@ class CLV
 
         $code = self::randomCode($length);
 
-        $affected = \WHMCS\Database\Capsule::table(self::T_CODES)
+        $query = \WHMCS\Database\Capsule::table(self::T_CODES)
             ->where('id', $row->id)
             ->whereNull('verified_at')
-            ->where('resends', '<', $maxResends)
-            ->whereRaw('TIMESTAMPDIFF(SECOND, created_at, UTC_TIMESTAMP()) >= ?', array($cooldown))
-            ->update(array(
-                'otp_hash'   => password_hash($code, PASSWORD_DEFAULT),
-                'expires_at' => self::dbPlusMinutes($expiry),
-                'created_at' => self::dbNow(),
-                'attempts'   => 0,
-                'resends'    => \WHMCS\Database\Capsule::raw('resends + 1'),
-            ));
+            ->where('resends', '<', $maxResends);
+
+        if ($cooldown > 0) {
+            $query->where('created_at', '<=', self::dbMinusSeconds($cooldown));
+        }
+
+        $affected = $query->update(array(
+            'otp_hash'   => password_hash($code, PASSWORD_DEFAULT),
+            'expires_at' => self::dbPlusMinutes($expiry),
+            'created_at' => self::dbNow(),
+            'attempts'   => 0,
+            'resends'    => \WHMCS\Database\Capsule::raw('resends + 1'),
+        ));
 
         if (!$affected) {
             return self::result(false, 'Please wait a moment before requesting another code.');
@@ -1085,9 +1136,205 @@ class CLV
             \WHMCS\Database\Capsule::table(self::T_LOGS)
                 ->where('created_at', '<', $logCutoff)
                 ->delete();
+
+            self::cleanupDevices();
         } catch (\Exception $e) {
             // non fatal
         }
+    }
+
+    /* ------------------------------------------------------------------
+     * Device Trust (Remember Device)
+     * ------------------------------------------------------------------ */
+
+    public static function isDeviceTrusted($clientId)
+    {
+        $clientId = (int) $clientId;
+        if ($clientId <= 0 || self::setting('rememberDevice') !== 'on') {
+            return false;
+        }
+
+        if (empty($_COOKIE[self::COOKIE_DEVICE])) {
+            return false;
+        }
+
+        $cookie = (string) $_COOKIE[self::COOKIE_DEVICE];
+        $parts  = explode(':', $cookie, 2);
+        if (count($parts) !== 2) {
+            return false;
+        }
+
+        $cookieUid   = (int) $parts[0];
+        $cookieToken = $parts[1];
+
+        if ($cookieUid !== $clientId || strlen($cookieToken) < 32) {
+            return false;
+        }
+
+        $tokenHash = hash('sha256', $cookieToken);
+
+        try {
+            $device = \WHMCS\Database\Capsule::table(self::T_DEVICES)
+                ->where('client_id', $clientId)
+                ->where('token_hash', $tokenHash)
+                ->where('expires_at', '>', self::dbNow())
+                ->first();
+
+            if ($device) {
+                \WHMCS\Database\Capsule::table(self::T_DEVICES)
+                    ->where('id', $device->id)
+                    ->update(array(
+                        'ip_address' => self::ip(),
+                        'user_agent' => self::userAgent(),
+                    ));
+                return true;
+            }
+        } catch (\Exception $e) {
+            return false;
+        }
+
+        return false;
+    }
+
+    public static function trustDevice($clientId, $days = null)
+    {
+        $clientId = (int) $clientId;
+        if ($clientId <= 0 || self::setting('rememberDevice') !== 'on') {
+            return false;
+        }
+
+        if ($days === null) {
+            $days = (int) self::setting('rememberDays');
+        }
+        if ($days < 1) {
+            $days = 30;
+        }
+
+        try {
+            $rawToken  = bin2hex(random_bytes(32));
+            $tokenHash = hash('sha256', $rawToken);
+            $expiresAt = self::dbPlusDays($days);
+            $cookieVal = $clientId . ':' . $rawToken;
+            $expireSec = time() + ($days * 86400);
+
+            \WHMCS\Database\Capsule::table(self::T_DEVICES)->insert(array(
+                'client_id'   => $clientId,
+                'token_hash'  => $tokenHash,
+                'ip_address'  => self::ip(),
+                'user_agent'  => self::userAgent(),
+                'expires_at'  => $expiresAt,
+                'created_at'  => self::dbNow(),
+            ));
+
+            $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+            if (PHP_VERSION_ID >= 70300) {
+                setcookie(self::COOKIE_DEVICE, $cookieVal, array(
+                    'expires'  => $expireSec,
+                    'path'     => '/',
+                    'secure'   => $isSecure,
+                    'httponly' => true,
+                    'samesite' => 'Lax',
+                ));
+            } else {
+                setcookie(self::COOKIE_DEVICE, $cookieVal, $expireSec, '/', '', $isSecure, true);
+            }
+
+            self::log($clientId, 'device_trusted', 'Device trusted for ' . $days . ' days');
+            return true;
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    public static function revokeDevice($clientId)
+    {
+        $clientId = (int) $clientId;
+        if (!empty($_COOKIE[self::COOKIE_DEVICE])) {
+            $parts = explode(':', (string) $_COOKIE[self::COOKIE_DEVICE], 2);
+            if (isset($parts[1])) {
+                $tokenHash = hash('sha256', $parts[1]);
+                try {
+                    \WHMCS\Database\Capsule::table(self::T_DEVICES)
+                        ->where('client_id', $clientId)
+                        ->where('token_hash', $tokenHash)
+                        ->delete();
+                } catch (\Exception $e) {
+                    // non fatal
+                }
+            }
+            $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+            if (PHP_VERSION_ID >= 70300) {
+                setcookie(self::COOKIE_DEVICE, '', array(
+                    'expires'  => time() - 3600,
+                    'path'     => '/',
+                    'secure'   => $isSecure,
+                    'httponly' => true,
+                    'samesite' => 'Lax',
+                ));
+            } else {
+                setcookie(self::COOKIE_DEVICE, '', time() - 3600, '/', '', $isSecure, true);
+            }
+        }
+    }
+
+    public static function cleanupDevices()
+    {
+        try {
+            \WHMCS\Database\Capsule::table(self::T_DEVICES)
+                ->where('expires_at', '<', self::dbNow())
+                ->delete();
+        } catch (\Exception $e) {
+            // non fatal
+        }
+    }
+
+    /* ------------------------------------------------------------------
+     * Language Loader (i18n)
+     * ------------------------------------------------------------------ */
+
+    public static function loadLang()
+    {
+        $lang = array();
+        $defaultLang = 'english';
+        $currentLang = $defaultLang;
+
+        if (!empty($_SESSION['Language'])) {
+            $currentLang = (string) $_SESSION['Language'];
+        } elseif (!empty($_SESSION['uid'])) {
+            try {
+                $clientLang = \WHMCS\Database\Capsule::table('tblclients')
+                    ->where('id', (int) $_SESSION['uid'])
+                    ->value('language');
+                if (!empty($clientLang)) {
+                    $currentLang = $clientLang;
+                }
+            } catch (\Exception $e) {
+                // ignore
+            }
+        }
+
+        $currentLang = preg_replace('/[^a-zA-Z0-9_-]/', '', strtolower($currentLang));
+        $langDir = dirname(__DIR__) . '/lang';
+
+        // Load English first as default base
+        $engFile = $langDir . '/english.php';
+        if (is_file($engFile)) {
+            include $engFile;
+        }
+
+        // Merge target language if different
+        if ($currentLang !== 'english') {
+            $targetFile = $langDir . '/' . $currentLang . '.php';
+            if (is_file($targetFile)) {
+                $customLang = array();
+                include $targetFile;
+                if (!empty($lang)) {
+                    // $lang was populated by include
+                }
+            }
+        }
+
+        return $lang;
     }
 
     /* ------------------------------------------------------------------
@@ -1137,14 +1384,11 @@ class CLV
         $base = '';
 
         try {
-            if (function_exists('select_query') && function_exists('mysql_fetch_assoc')) {
-                $result = select_query('tblconfiguration', 'value', array('setting' => 'SystemURL'));
-                if ($result) {
-                    $row = mysql_fetch_assoc($result);
-                    if ($row && !empty($row['value'])) {
-                        $base = rtrim($row['value'], '/');
-                    }
-                }
+            $stored = (string) \WHMCS\Database\Capsule::table('tblconfiguration')
+                ->where('setting', 'SystemURL')
+                ->value('value');
+            if ($stored !== '') {
+                $base = rtrim($stored, '/');
             }
         } catch (\Exception $e) {
             $base = '';
