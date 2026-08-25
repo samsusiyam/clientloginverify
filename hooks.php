@@ -16,6 +16,7 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/lib/clv_helper.php';
+require_once __DIR__ . '/app/License/LicenseManager.php';
 
 /**
  * After a correct password: check trusted device, create a code, email it,

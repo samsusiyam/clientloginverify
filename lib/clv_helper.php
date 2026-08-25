@@ -24,6 +24,8 @@ if (!defined('WHMCS')) {
     die('This file cannot be accessed directly.');
 }
 
+require_once dirname(__DIR__) . '/app/License/LicenseManager.php';
+
 if (!class_exists('CLV')) {
 
 class CLV
@@ -295,7 +297,17 @@ class CLV
 
     public static function isEnabled()
     {
-        return self::setting('enableModule') === 'on';
+        if (self::setting('enableModule') !== 'on') {
+            return false;
+        }
+
+        if (class_exists('\\ClientLoginVerify\\License\\LicenseManager')) {
+            if (!\ClientLoginVerify\License\LicenseManager::isLicensed(false)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

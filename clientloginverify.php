@@ -23,6 +23,9 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/lib/clv_helper.php';
+require_once __DIR__ . '/app/License/LicenseManager.php';
+
+use ClientLoginVerify\License\LicenseManager;
 
 /**
  * Module metadata shown in the WHMCS admin area. Defining `name`, `author` and
@@ -33,11 +36,19 @@ function clientloginverify_config()
 {
     $config = array(
         'name'        => 'Client Login Verify',
-        'description' => 'Email based two factor authentication (2FA) for WHMCS client logins. After a successful password login a one time verification code is emailed to the client and every client area page stays locked until the code is entered, protecting accounts from password theft.',
-        'author'      => 'Host Nibo',
+        'description' => 'Email based two factor authentication (2FA) for WHMCS client logins. Protected with Host Nibo ELMS Licensing.',
+        'author'      => '<a href="https://hostnibo.com" target="_blank">Host Nibo</a>',
         'language'    => 'english',
         'version'     => '3.0',
-        'fields'      => array(),
+        'fields'      => array(
+            'license_key' => array(
+                'FriendlyName' => 'License Key',
+                'Type'         => 'text',
+                'Size'         => '40',
+                'Description'  => 'Enter your Host Nibo ELMS license key',
+                'Default'      => '',
+            ),
+        ),
     );
 
     foreach (CLV::fields() as $key => $field) {
@@ -228,6 +239,18 @@ function clientloginverify_output($vars)
     $notice     = '';
     $noticeType = 'success';
 
+    // 🔒 ELMS License Gatekeeper: Lock dashboard if license is not active
+    $isLicensed = LicenseManager::isLicensed(true);
+    if (!$isLicensed && $action !== 'license' && $view !== 'license') {
+        require_once __DIR__ . '/admin/license.php';
+        return;
+    }
+
+    if ($action === 'license' || $view === 'license') {
+        require_once __DIR__ . '/admin/license.php';
+        return;
+    }
+
     // ---- Handle POST / GET actions (all CSRF protected) --------------
     if ($action !== '') {
         $tokenOk = (function_exists('check_token')) ? check_token('WHMCS.admin.default') : true;
@@ -337,6 +360,7 @@ function clientloginverify_render_header($modulelink, $logo, $view, $notice, $no
         'settings'  => 'Settings',
         'clients'   => 'Clients',
         'logs'      => 'Logs',
+        'license'   => '<i class="fa fa-shield"></i> License',
     );
 
     $html  = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">';
