@@ -124,6 +124,17 @@ function clientloginverify_activate()
             });
         }
 
+        if (!$schema->hasTable(CLV::T_BACKUP_CODES)) {
+            $schema->create(CLV::T_BACKUP_CODES, function ($table) {
+                $table->increments('id');
+                $table->unsignedInteger('client_id');
+                $table->string('code_hash', 255);
+                $table->dateTime('used_at')->nullable();
+                $table->dateTime('created_at')->nullable();
+                $table->index(array('client_id', 'used_at'), 'client_backup');
+            });
+        }
+
         clientloginverify_create_email_template();
 
         return array(
@@ -221,7 +232,31 @@ function clientloginverify_output($vars)
     if ($action !== '') {
         $tokenOk = (function_exists('check_token')) ? check_token('WHMCS.admin.default') : true;
 
-        if ($action === 'savesettings' && $_SERVER['REQUEST_METHOD'] === 'POST' && $tokenOk) {
+        if ($action === 'exportlogs' && $tokenOk) {
+            $fEvent  = isset($_GET['event']) ? preg_replace('/[^a-z_]/', '', strtolower($_GET['event'])) : '';
+            $fClient = isset($_GET['client']) ? (int) $_GET['client'] : 0;
+            $query   = \WHMCS\Database\Capsule::table(CLV::T_LOGS);
+            if ($fEvent !== '') {
+                $query->where('event', $fEvent);
+            }
+            if ($fClient > 0) {
+                $query->where('client_id', $fClient);
+            }
+            $rows = $query->orderBy('id', 'desc')->get();
+
+            if (ob_get_level()) {
+                ob_end_clean();
+            }
+            header('Content-Type: text/csv; charset=utf-8');
+            header('Content-Disposition: attachment; filename=clv_logs_' . date('Y-m-d_His') . '.csv');
+            $out = fopen('php://output', 'w');
+            fputcsv($out, array('ID', 'Client ID', 'Event', 'IP', 'User Agent', 'Message', 'Created At (UTC)'));
+            foreach ($rows as $r) {
+                fputcsv($out, array($r->id, $r->client_id, $r->event, $r->ip, $r->user_agent, $r->message, $r->created_at));
+            }
+            fclose($out);
+            exit;
+        } elseif ($action === 'savesettings' && $_SERVER['REQUEST_METHOD'] === 'POST' && $tokenOk) {
             CLV::saveSettings($_POST);
             $notice = 'Settings saved.';
             $view   = 'settings';
@@ -335,7 +370,8 @@ function clientloginverify_render_header($modulelink, $logo, $view, $notice, $no
 
 function clientloginverify_view_dashboard($modulelink)
 {
-    $stats = CLV::stats();
+    $stats     = CLV::stats();
+    $chartData = CLV::chartData(7);
 
     $card = function ($label, $value, $color) {
         return '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #e3e8ee;border-radius:8px;padding:16px;text-align:center;">'
@@ -349,6 +385,56 @@ function clientloginverify_view_dashboard($modulelink)
     $html .= $card('Failed (24h)', $stats['failed'], '#b71c1c');
     $html .= $card('Total log entries', $stats['totalLogs'], '#5a6b85');
     $html .= '</div>';
+
+    // Chart Section
+    $html .= '<div style="background:#fff;border:1px solid #e3e8ee;border-radius:8px;padding:18px;margin-bottom:24px;">';
+    $html .= '<h3 style="margin-top:0;margin-bottom:14px;font-size:16px;">7-Day Verification Trend</h3>';
+    $html .= '<div style="height:220px;position:relative;"><canvas id="clvChart"></canvas></div>';
+    $html .= '</div>';
+
+    $labelsJson   = json_encode($chartData['labels']);
+    $verifiedJson = json_encode($chartData['verified']);
+    $failedJson   = json_encode($chartData['failed']);
+
+    $html .= '<script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>';
+    $html .= '<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        var ctx = document.getElementById("clvChart");
+        if (ctx && typeof Chart !== "undefined") {
+            new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels: ' . $labelsJson . ',
+                    datasets: [
+                        {
+                            label: "Verified",
+                            data: ' . $verifiedJson . ',
+                            borderColor: "#1e7e34",
+                            backgroundColor: "rgba(30, 126, 52, 0.1)",
+                            fill: true,
+                            tension: 0.3
+                        },
+                        {
+                            label: "Failed",
+                            data: ' . $failedJson . ',
+                            borderColor: "#b71c1c",
+                            backgroundColor: "rgba(183, 28, 28, 0.1)",
+                            fill: true,
+                            tension: 0.3
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, ticks: { precision: 0 } }
+                    }
+                }
+            });
+        }
+    });
+    </script>';
 
     // Recent events
     $html .= '<h3>Recent activity</h3>';
@@ -602,9 +688,18 @@ function clientloginverify_view_logs($modulelink)
         . ($client > 0 ? '&client=' . $client : '')
         . '&token=' . urlencode($tokVal);
     $clearLabel = ($event !== '' || $client > 0) ? 'Delete filtered logs' : 'Delete all logs';
-    $html .= '<p><a class="btn btn-danger btn-sm" href="' . $clearHref . '" '
+
+    $exportHref = htmlspecialchars($modulelink) . '&action=exportlogs'
+        . ($event !== '' ? '&event=' . urlencode($event) : '')
+        . ($client > 0 ? '&client=' . $client : '')
+        . '&token=' . urlencode($tokVal);
+
+    $html .= '<div style="display:flex;gap:8px;margin-bottom:12px;">';
+    $html .= '<a class="btn btn-default btn-sm" href="' . $exportHref . '"><i class="fas fa-file-csv"></i> Export to CSV</a>';
+    $html .= '<a class="btn btn-danger btn-sm" href="' . $clearHref . '" '
         . 'onclick="return confirm(\'Delete these log entries? This cannot be undone.\');">'
-        . htmlspecialchars($clearLabel) . '</a></p>';
+        . htmlspecialchars($clearLabel) . '</a>';
+    $html .= '</div>';
 
     $html .= '<table class="datatable" width="100%" border="0" cellspacing="1" cellpadding="3">';
     $html .= '<thead><tr><th>ID</th><th>Client</th><th>Event</th><th>IP</th><th>Message</th><th>Time (UTC)</th><th>Action</th></tr></thead><tbody>';
@@ -682,10 +777,37 @@ function clientloginverify_clientarea($vars)
     }
 
     try {
+        $action = isset($_REQUEST['action']) ? $_REQUEST['action'] : '';
+
+        // Device Management Page (for already verified clients)
+        if ($action === 'devices' || $action === 'revokedevice' || $action === 'revokealldevices') {
+            if ($action === 'revokedevice' && isset($_REQUEST['device_id'])) {
+                $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
+                if ($tokenOk) {
+                    CLV::revokeDeviceById($clientId, (int) $_REQUEST['device_id']);
+                    $base['vars']['info'] = isset($lang['device_revoked']) ? $lang['device_revoked'] : 'Trusted device has been revoked.';
+                }
+            } elseif ($action === 'revokealldevices') {
+                $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
+                if ($tokenOk) {
+                    CLV::revokeAllDevices($clientId);
+                    $base['vars']['info'] = isset($lang['device_revoked']) ? $lang['device_revoked'] : 'All trusted devices have been revoked.';
+                }
+            }
+
+            $base['vars']['view_mode']      = 'devices';
+            $base['vars']['client_devices'] = CLV::clientDevices($clientId);
+            $base['vars']['token']          = function_exists('generate_token') ? generate_token('plain') : '';
+            $base['vars']['devices_url']    = CLV::systemUrl('index.php?m=clientloginverify&action=devices');
+            $base['vars']['back_url']       = CLV::systemUrl('clientarea.php');
+            return $base;
+        }
+
         // Not on the dedicated verify page: nothing to render here.
         if (!CLV::isVerifyPage()) {
             $base['vars']['normalview'] = true;
             $base['vars']['logout_url'] = CLV::systemUrl('clientarea.php');
+            $base['vars']['devices_url'] = CLV::systemUrl('index.php?m=clientloginverify&action=devices');
             return $base;
         }
 
@@ -713,6 +835,7 @@ function clientloginverify_clientarea($vars)
         }
 
         $otpLength = (int) CLV::setting('otpLength');
+        $viewMode  = (isset($_GET['mode']) && $_GET['mode'] === 'backup') ? 'backup' : 'otp';
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
@@ -721,6 +844,25 @@ function clientloginverify_clientarea($vars)
             } elseif (isset($_GET['action']) && $_GET['action'] === 'resend') {
                 $res = CLV::resendCode($clientId);
                 $base['vars'][$res['success'] ? 'info' : 'error'] = $res['message'];
+            } elseif (isset($_POST['clv_backup_code'])) {
+                $valid = CLV::verifyBackupCode($clientId, $_POST['clv_backup_code']);
+                if ($valid) {
+                    if (!empty($_POST['trust_device']) && $_POST['trust_device'] === 'on') {
+                        CLV::trustDevice($clientId);
+                    }
+                    CLV::markPassed($clientId);
+
+                    $returnUrl = CLV::sessionGet('clv_return_url');
+                    if (!$returnUrl && !empty($_SESSION['loginurlredirect'])) {
+                        $returnUrl = $_SESSION['loginurlredirect'];
+                    }
+                    CLV::sessionForget('clv_return_url');
+
+                    CLV::redirect($returnUrl ? $returnUrl : CLV::systemUrl('clientarea.php'));
+                } else {
+                    $viewMode = 'backup';
+                    $base['vars']['error'] = isset($lang['backup_code_invalid']) ? $lang['backup_code_invalid'] : 'Invalid or already used backup code.';
+                }
             } elseif (isset($_POST['clv_code'])) {
                 $res = CLV::verifyCode($clientId, $_POST['clv_code']);
                 if ($res['success']) {
@@ -753,15 +895,19 @@ function clientloginverify_clientarea($vars)
         $rememberDays = (int) CLV::setting('rememberDays', 30);
         $rememberLabel = isset($lang['remember_device']) ? str_replace(':days', (string) $rememberDays, $lang['remember_device']) : ('Trust this device for ' . $rememberDays . ' days');
 
+        $base['vars']['view_mode']              = $viewMode;
         $base['vars']['token']                  = function_exists('generate_token') ? generate_token('plain') : '';
         $base['vars']['otp_length']             = $otpLength;
         $base['vars']['verify_url']             = CLV::verifyUrl();
         $base['vars']['resend_url']             = CLV::verifyUrl() . '&action=resend';
+        $base['vars']['backup_url']             = CLV::verifyUrl() . '&mode=backup';
+        $base['vars']['otp_mode_url']           = CLV::verifyUrl();
         $base['vars']['logout_url']             = CLV::systemUrl('logout.php');
         $base['vars']['cooldown_remaining']     = CLV::resendCooldownRemaining($clientId);
         $base['vars']['remember_device_enabled'] = (CLV::setting('rememberDevice') === 'on');
         $base['vars']['remember_days']          = $rememberDays;
         $base['vars']['remember_label']         = $rememberLabel;
+        $base['vars']['remaining_backup_codes'] = CLV::remainingBackupCodesCount($clientId);
     } catch (\Exception $e) {
         $base['vars']['error']                  = 'An unexpected error occurred. Please try again or contact support.';
         $base['vars']['token']                  = function_exists('generate_token') ? generate_token('plain') : '';

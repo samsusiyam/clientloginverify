@@ -32,10 +32,11 @@ class CLV
     const MODULE = 'clientloginverify';
 
     /** Table names (kept from v1/v2 so existing data is preserved) */
-    const T_CODES    = 'mod_clientloginverify_codes';
-    const T_LOGS     = 'mod_clientloginverify_logs';
-    const T_SETTINGS = 'mod_clientloginverify_settings';
-    const T_DEVICES  = 'mod_clientloginverify_devices';
+    const T_CODES        = 'mod_clientloginverify_codes';
+    const T_LOGS         = 'mod_clientloginverify_logs';
+    const T_SETTINGS     = 'mod_clientloginverify_settings';
+    const T_DEVICES      = 'mod_clientloginverify_devices';
+    const T_BACKUP_CODES = 'mod_clientloginverify_backup_codes';
 
     /** Cookie name for trusted device */
     const COOKIE_DEVICE = 'clv_trusted_device';
@@ -867,12 +868,15 @@ class CLV
         $clientId = (int) $clientId;
         $expiry   = (int) self::setting('otpExpiry');
         $agent    = self::userAgent();
+        $ip       = self::ip();
+        $location = self::location($ip);
 
         $merge = array(
             'clv_code'     => $code,
             'clv_expiry'   => $expiry,
             'clv_datetime' => self::displayNow(),
-            'clv_ip'       => self::ip(),
+            'clv_ip'       => $ip,
+            'clv_location' => $location,
             'clv_browser'  => self::browser($agent),
             'clv_os'       => self::os($agent),
         );
@@ -940,10 +944,57 @@ class CLV
             . '<p><strong>Request details</strong><br>'
             . 'Time: {$clv_datetime}<br>'
             . 'IP address: {$clv_ip}<br>'
+            . 'Location: {$clv_location}<br>'
             . 'Browser: {$clv_browser}<br>'
             . 'Operating system: {$clv_os}</p>'
             . '<p>If you did not try to log in, please change your password immediately.</p>'
             . '<p>Regards,<br>{$company_name}</p>';
+    }
+
+    /**
+     * GeoIP Location resolver with fast timeout.
+     */
+    public static function location($ip)
+    {
+        if ($ip === '' || $ip === '127.0.0.1' || $ip === '::1') {
+            return 'Localhost';
+        }
+
+        static $locCache = array();
+        if (isset($locCache[$ip])) {
+            return $locCache[$ip];
+        }
+
+        $location = 'Unknown';
+        try {
+            $ctx = stream_context_create(array(
+                'http' => array(
+                    'timeout'    => 1.5,
+                    'user_agent' => 'WHMCS-CLV',
+                ),
+            ));
+            $json = @file_get_contents('http://ip-api.com/json/' . urlencode($ip) . '?fields=status,city,country', false, $ctx);
+            if ($json) {
+                $data = json_decode($json, true);
+                if (isset($data['status']) && $data['status'] === 'success') {
+                    $parts = array();
+                    if (!empty($data['city'])) {
+                        $parts[] = $data['city'];
+                    }
+                    if (!empty($data['country'])) {
+                        $parts[] = $data['country'];
+                    }
+                    if (!empty($parts)) {
+                        $location = implode(', ', $parts);
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            $location = 'Unknown';
+        }
+
+        $locCache[$ip] = $location;
+        return $location;
     }
 
     /**
@@ -1338,8 +1389,161 @@ class CLV
     }
 
     /* ------------------------------------------------------------------
-     * Stats for the admin dashboard
+     * Device Management for Client Area
      * ------------------------------------------------------------------ */
+
+    public static function clientDevices($clientId)
+    {
+        try {
+            return \WHMCS\Database\Capsule::table(self::T_DEVICES)
+                ->where('client_id', (int) $clientId)
+                ->where('expires_at', '>', self::dbNow())
+                ->orderBy('created_at', 'desc')
+                ->get();
+        } catch (\Exception $e) {
+            return array();
+        }
+    }
+
+    public static function revokeDeviceById($clientId, $deviceId)
+    {
+        try {
+            return (bool) \WHMCS\Database\Capsule::table(self::T_DEVICES)
+                ->where('client_id', (int) $clientId)
+                ->where('id', (int) $deviceId)
+                ->delete();
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    public static function revokeAllDevices($clientId)
+    {
+        try {
+            return (bool) \WHMCS\Database\Capsule::table(self::T_DEVICES)
+                ->where('client_id', (int) $clientId)
+                ->delete();
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    /* ------------------------------------------------------------------
+     * Emergency Backup Recovery Codes
+     * ------------------------------------------------------------------ */
+
+    public static function generateBackupCodes($clientId, $count = 8)
+    {
+        $clientId = (int) $clientId;
+        $codes = array();
+        try {
+            \WHMCS\Database\Capsule::table(self::T_BACKUP_CODES)
+                ->where('client_id', $clientId)
+                ->delete();
+
+            for ($i = 0; $i < $count; $i++) {
+                $raw = strtoupper(bin2hex(random_bytes(4)));
+                $codes[] = $raw;
+                \WHMCS\Database\Capsule::table(self::T_BACKUP_CODES)->insert(array(
+                    'client_id'  => $clientId,
+                    'code_hash'  => password_hash($raw, PASSWORD_DEFAULT),
+                    'used_at'    => null,
+                    'created_at' => self::dbNow(),
+                ));
+            }
+        } catch (\Exception $e) {
+            // non fatal
+        }
+        return $codes;
+    }
+
+    public static function verifyBackupCode($clientId, $input)
+    {
+        $clientId = (int) $clientId;
+        $input = strtoupper(trim(preg_replace('/[^A-Za-z0-9]/', '', (string) $input)));
+        if (strlen($input) < 6) {
+            return false;
+        }
+
+        try {
+            $rows = \WHMCS\Database\Capsule::table(self::T_BACKUP_CODES)
+                ->where('client_id', $clientId)
+                ->whereNull('used_at')
+                ->get();
+
+            foreach ($rows as $row) {
+                if (password_verify($input, $row->code_hash)) {
+                    \WHMCS\Database\Capsule::table(self::T_BACKUP_CODES)
+                        ->where('id', $row->id)
+                        ->update(array('used_at' => self::dbNow()));
+
+                    self::log($clientId, 'verified', 'Verified using backup recovery code');
+                    return true;
+                }
+            }
+        } catch (\Exception $e) {
+            return false;
+        }
+        return false;
+    }
+
+    public static function remainingBackupCodesCount($clientId)
+    {
+        try {
+            return (int) \WHMCS\Database\Capsule::table(self::T_BACKUP_CODES)
+                ->where('client_id', (int) $clientId)
+                ->whereNull('used_at')
+                ->count();
+        } catch (\Exception $e) {
+            return 0;
+        }
+    }
+
+    /* ------------------------------------------------------------------
+     * Stats & Chart for the admin dashboard
+     * ------------------------------------------------------------------ */
+
+    public static function chartData($days = 7)
+    {
+        $labels   = array();
+        $verified = array();
+        $failed   = array();
+
+        for ($i = $days - 1; $i >= 0; $i--) {
+            $d = self::now();
+            if ($i > 0) {
+                $d->modify('-' . $i . ' days');
+            }
+            $dateStr  = $d->format('Y-m-d');
+            $labels[] = $d->format('M j');
+
+            $start = $dateStr . ' 00:00:00';
+            $end   = $dateStr . ' 23:59:59';
+
+            try {
+                $vCount = \WHMCS\Database\Capsule::table(self::T_LOGS)
+                    ->where('event', 'verified')
+                    ->whereBetween('created_at', array($start, $end))
+                    ->count();
+                $fCount = \WHMCS\Database\Capsule::table(self::T_LOGS)
+                    ->where('event', 'failed')
+                    ->whereBetween('created_at', array($start, $end))
+                    ->count();
+            } catch (\Exception $e) {
+                $vCount = 0;
+                $fCount = 0;
+            }
+
+            $verified[] = $vCount;
+            $failed[]   = $fCount;
+        }
+
+        return array(
+            'labels'   => $labels,
+            'verified' => $verified,
+            'failed'   => $failed,
+        );
+    }
 
     public static function stats()
     {
