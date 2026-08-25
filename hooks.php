@@ -190,7 +190,7 @@ add_hook('ClientAreaSecondaryNavbar', 1, function ($secondaryNavbar) {
         if ($accountMenu) {
             $accountMenu->addChild('ClientLoginVerifySecurity', array(
                 'label'   => 'Two-Factor / 2FA Security',
-                'uri'     => 'index.php?m=clientloginverify&action=security',
+                'uri'     => 'index.php?m=clientloginverify',
                 'order'   => 50,
                 'icon'    => 'fas fa-shield-alt',
             ));

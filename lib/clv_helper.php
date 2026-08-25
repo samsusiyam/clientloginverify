@@ -52,6 +52,93 @@ class CLV
     /** In-request settings cache */
     protected static $cache = array();
 
+    /** Schema checked flag */
+    protected static $schemaChecked = false;
+
+    /**
+     * Self-healing schema migration: ensure all module tables exist.
+     */
+    public static function ensureSchema()
+    {
+        if (self::$schemaChecked) {
+            return;
+        }
+        self::$schemaChecked = true;
+        try {
+            $schema = \WHMCS\Database\Capsule::schema();
+
+            if (!$schema->hasTable(self::T_CODES)) {
+                $schema->create(self::T_CODES, function ($table) {
+                    $table->increments('id');
+                    $table->unsignedInteger('user_id')->nullable();
+                    $table->unsignedInteger('client_id');
+                    $table->string('otp_hash', 255);
+                    $table->dateTime('expires_at');
+                    $table->unsignedSmallInteger('attempts')->default(0);
+                    $table->unsignedSmallInteger('max_attempts')->default(5);
+                    $table->unsignedSmallInteger('resends')->default(0);
+                    $table->dateTime('verified_at')->nullable();
+                    $table->dateTime('created_at')->nullable();
+                    $table->index(array('client_id', 'verified_at'), 'client_verified');
+                    $table->index('expires_at', 'expires_at');
+                });
+            }
+
+            if (!$schema->hasTable(self::T_LOGS)) {
+                $schema->create(self::T_LOGS, function ($table) {
+                    $table->increments('id');
+                    $table->unsignedInteger('client_id');
+                    $table->string('event', 50);
+                    $table->string('ip', 45);
+                    $table->string('user_agent', 500)->nullable();
+                    $table->text('message')->nullable();
+                    $table->dateTime('created_at')->nullable();
+                    $table->index('client_id', 'client_id');
+                    $table->index(array('ip', 'created_at'), 'ip_time');
+                    $table->index(array('event', 'created_at'), 'event_time');
+                });
+            }
+
+            if (!$schema->hasTable(self::T_SETTINGS)) {
+                $schema->create(self::T_SETTINGS, function ($table) {
+                    $table->increments('id');
+                    $table->unsignedInteger('client_id');
+                    $table->string('setting', 50);
+                    $table->string('value', 255)->nullable();
+                    $table->dateTime('created_at')->nullable();
+                    $table->unique(array('client_id', 'setting'), 'client_setting');
+                });
+            }
+
+            if (!$schema->hasTable(self::T_DEVICES)) {
+                $schema->create(self::T_DEVICES, function ($table) {
+                    $table->increments('id');
+                    $table->unsignedInteger('client_id');
+                    $table->string('token_hash', 64);
+                    $table->string('ip_address', 45)->nullable();
+                    $table->string('user_agent', 500)->nullable();
+                    $table->dateTime('expires_at');
+                    $table->dateTime('created_at')->nullable();
+                    $table->index(array('client_id', 'token_hash'), 'client_token');
+                    $table->index('expires_at', 'expires_at');
+                });
+            }
+
+            if (!$schema->hasTable(self::T_BACKUP_CODES)) {
+                $schema->create(self::T_BACKUP_CODES, function ($table) {
+                    $table->increments('id');
+                    $table->unsignedInteger('client_id');
+                    $table->string('code_hash', 255);
+                    $table->dateTime('used_at')->nullable();
+                    $table->dateTime('created_at')->nullable();
+                    $table->index(array('client_id', 'used_at'), 'client_backup');
+                });
+            }
+        } catch (\Exception $e) {
+            // non fatal
+        }
+    }
+
     /* ------------------------------------------------------------------
      * Settings
      * ------------------------------------------------------------------ */
@@ -1199,6 +1286,7 @@ class CLV
 
     public static function isDeviceTrusted($clientId)
     {
+        self::ensureSchema();
         $clientId = (int) $clientId;
         if ($clientId <= 0 || self::setting('rememberDevice') !== 'on') {
             return false;
@@ -1248,6 +1336,7 @@ class CLV
 
     public static function trustDevice($clientId, $days = null)
     {
+        self::ensureSchema();
         $clientId = (int) $clientId;
         if ($clientId <= 0 || self::setting('rememberDevice') !== 'on') {
             return false;
@@ -1276,7 +1365,10 @@ class CLV
                 'created_at'  => self::dbNow(),
             ));
 
-            $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+            $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
+                || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443);
+
             if (PHP_VERSION_ID >= 70300) {
                 setcookie(self::COOKIE_DEVICE, $cookieVal, array(
                     'expires'  => $expireSec,
@@ -1393,6 +1485,7 @@ class CLV
 
     public static function clientDevices($clientId)
     {
+        self::ensureSchema();
         try {
             return \WHMCS\Database\Capsule::table(self::T_DEVICES)
                 ->where('client_id', (int) $clientId)
@@ -1406,6 +1499,7 @@ class CLV
 
     public static function revokeDeviceById($clientId, $deviceId)
     {
+        self::ensureSchema();
         try {
             return (bool) \WHMCS\Database\Capsule::table(self::T_DEVICES)
                 ->where('client_id', (int) $clientId)
@@ -1418,6 +1512,7 @@ class CLV
 
     public static function revokeAllDevices($clientId)
     {
+        self::ensureSchema();
         try {
             return (bool) \WHMCS\Database\Capsule::table(self::T_DEVICES)
                 ->where('client_id', (int) $clientId)
@@ -1433,6 +1528,7 @@ class CLV
 
     public static function generateBackupCodes($clientId, $count = 8)
     {
+        self::ensureSchema();
         $clientId = (int) $clientId;
         $codes = array();
         try {
@@ -1458,6 +1554,7 @@ class CLV
 
     public static function verifyBackupCode($clientId, $input)
     {
+        self::ensureSchema();
         $clientId = (int) $clientId;
         $input = strtoupper(trim(preg_replace('/[^A-Za-z0-9]/', '', (string) $input)));
         if (strlen($input) < 6) {
@@ -1488,6 +1585,7 @@ class CLV
 
     public static function remainingBackupCodesCount($clientId)
     {
+        self::ensureSchema();
         try {
             return (int) \WHMCS\Database\Capsule::table(self::T_BACKUP_CODES)
                 ->where('client_id', (int) $clientId)

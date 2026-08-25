@@ -60,6 +60,7 @@
 
                     <form method="post" action="{$generate_codes_url}">
                         <input type="hidden" name="token" value="{$token}">
+                        <input type="hidden" name="clv_generate_backup_codes" value="1">
                         <button type="submit" class="clv-btn-sm clv-btn-primary" onclick="return confirm('{$lang.generate_codes_warn|default:'Generating new backup codes will invalidate any existing ones.'}');">
                             🔑 {$lang.generate_codes|default:'Generate New Backup Codes'}
                         </button>
@@ -111,21 +112,6 @@
                 <a href="{$back_url|default:'clientarea.php'}">&larr; Back to Client Area</a>
             </p>
 
-        {elseif $normalview}
-            <div class="clv-icon-wrapper clv-icon-success">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                    <polyline points="9 12 11 14 15 10"></polyline>
-                </svg>
-            </div>
-            <h2 class="clv-title">{$lang.title}</h2>
-            <p class="clv-text">{$lang.normal_active}</p>
-            <div style="display:flex;flex-direction:column;gap:10px;">
-                <a href="{$logout_url|default:'clientarea.php'}" class="clv-btn">{$lang.continue}</a>
-                {if $security_url}
-                    <a href="{$security_url}" class="clv-btn clv-btn-secondary">{$lang.security_center|default:'2FA Security Center'}</a>
-                {/if}
-            </div>
         {else}
             <div class="clv-icon-wrapper clv-icon-shield">
                 <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

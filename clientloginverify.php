@@ -777,28 +777,37 @@ function clientloginverify_clientarea($vars)
     }
 
     try {
+        CLV::ensureSchema();
         $action = isset($_REQUEST['action']) ? $_REQUEST['action'] : '';
 
-        // Security Hub / Device Management / Backup Codes (for verified logged-in clients)
-        if ($action === 'security' || $action === 'devices' || $action === 'backupcodes' || $action === 'generatebackupcodes' || $action === 'revokedevice' || $action === 'revokealldevices') {
+        $tokenOk = true;
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            if (function_exists('check_token')) {
+                $tokenOk = @check_token('WHMCS.default') || @check_token('WHMCS.clientarea.default') || @check_token();
+            }
+        }
+
+        $isPassed = CLV::passedFor($clientId);
+
+        // Security Hub (for logged-in clients or explicit security action)
+        if ($isPassed || $action === 'security' || $action === 'devices' || $action === 'backupcodes' || $action === 'generatebackupcodes' || $action === 'revokedevice' || $action === 'revokealldevices') {
             if ($action === 'revokedevice' && isset($_REQUEST['device_id'])) {
-                $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
                 if ($tokenOk) {
                     CLV::revokeDeviceById($clientId, (int) $_REQUEST['device_id']);
                     $base['vars']['info'] = isset($lang['device_revoked']) ? $lang['device_revoked'] : 'Trusted device has been revoked.';
                 }
             } elseif ($action === 'revokealldevices') {
-                $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
                 if ($tokenOk) {
                     CLV::revokeAllDevices($clientId);
                     $base['vars']['info'] = isset($lang['device_revoked']) ? $lang['device_revoked'] : 'All trusted devices have been revoked.';
                 }
-            } elseif ($action === 'generatebackupcodes') {
-                $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
+            } elseif ($action === 'generatebackupcodes' || isset($_POST['clv_generate_backup_codes'])) {
                 if ($tokenOk) {
                     $newCodes = CLV::generateBackupCodes($clientId);
                     $base['vars']['new_backup_codes'] = $newCodes;
                     $base['vars']['info'] = isset($lang['save_codes_warning']) ? $lang['save_codes_warning'] : 'Save these codes in a safe place. They will not be shown again.';
+                } else {
+                    $base['vars']['error'] = isset($lang['session_expired']) ? $lang['session_expired'] : 'Your session has expired. Please try again.';
                 }
             }
 
@@ -813,17 +822,8 @@ function clientloginverify_clientarea($vars)
             return $base;
         }
 
-        // Not on the dedicated verify page: nothing to render here.
-        if (!CLV::isVerifyPage()) {
-            $base['vars']['normalview']   = true;
-            $base['vars']['logout_url']   = CLV::systemUrl('clientarea.php');
-            $base['vars']['security_url'] = CLV::systemUrl('index.php?m=clientloginverify&action=security');
-            $base['vars']['devices_url']  = CLV::systemUrl('index.php?m=clientloginverify&action=devices');
-            return $base;
-        }
-
-        // Check if device is trusted or already passed or 2FA not required
-        if (CLV::isDeviceTrusted($clientId) || !CLV::requires2FA($clientId) || CLV::passedFor($clientId)) {
+        // Mid-login flow: Check if device is trusted or 2FA not required
+        if (CLV::isDeviceTrusted($clientId) || !CLV::requires2FA($clientId)) {
             CLV::markPassed($clientId);
             $returnUrl = CLV::sessionGet('clv_return_url');
             if (!$returnUrl && !empty($_SESSION['loginurlredirect'])) {
@@ -837,7 +837,6 @@ function clientloginverify_clientarea($vars)
         $viewMode  = (isset($_GET['mode']) && $_GET['mode'] === 'backup') ? 'backup' : 'otp';
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $tokenOk = function_exists('check_token') ? check_token('WHMCS.default') : true;
             if (!$tokenOk) {
                 $base['vars']['error'] = isset($lang['session_expired']) ? $lang['session_expired'] : 'Your session has expired. Please try again.';
             } elseif (isset($_GET['action']) && $_GET['action'] === 'resend') {
