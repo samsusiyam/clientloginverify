@@ -3,7 +3,7 @@
  * Host Nibo ELMS License Client Engine
  * 
  * Website: https://hostnibo.com
- * Support: https://hostnibo.com/contact
+ * Support: https://siyam.bio.link/
  * License Server: https://lic.hostnibo.com
  */
 
@@ -223,7 +223,7 @@ class LicenseManager
         $details = [
             'status'       => 'unlicensed',
             'expiry'       => 'Lifetime',
-            'product_name' => 'Client Login Verify',
+            'product_name' => '2FA Email Verification',
             'product_key'  => $this->productKey,
         ];
 
@@ -233,7 +233,7 @@ class LicenseManager
             if (!empty($check['status'])) {
                 $details['status']       = 'active';
                 $details['expiry']       = $check['data']['expiry'] ?? ($check['data']['expires_at'] ?? 'Lifetime');
-                $details['product_name'] = $check['data']['product_name'] ?? ($check['data']['product'] ?? 'Client Login Verify');
+                $details['product_name'] = $check['data']['product_name'] ?? ($check['data']['product'] ?? '2FA Email Verification');
                 $details['product_key']  = $check['data']['product_key'] ?? $this->productKey;
             } else {
                 $msg = strtolower($check['message'] ?? '');

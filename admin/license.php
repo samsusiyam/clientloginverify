@@ -4,7 +4,7 @@
  *
  * Developed by Host Nibo
  * Website: https://hostnibo.com
- * Support: https://hostnibo.com/contact
+ * Support: https://siyam.bio.link/
  */
 
 if (!defined("WHMCS")) {
@@ -150,7 +150,7 @@ $moduleUrl = 'addonmodules.php?module=' . LicenseManager::MODULE_NAME;
                     <i class="fa fa-arrow-left"></i> Back to Dashboard
                 </a>
             <?php else: ?>
-                <a href="https://hostnibo.com/contact" target="_blank" class="hn-btn hn-btn-outline">
+                <a href="https://siyam.bio.link/" target="_blank" class="hn-btn hn-btn-outline">
                     <i class="fa fa-life-ring"></i> Get License Support
                 </a>
             <?php endif; ?>
@@ -242,7 +242,7 @@ $moduleUrl = 'addonmodules.php?module=' . LicenseManager::MODULE_NAME;
             Each license is uniquely bound to your domain (<strong><?php echo htmlspecialchars($details['domain']); ?></strong>) and server IP (<strong><?php echo htmlspecialchars($details['ip']); ?></strong>).
         </p>
         <p style="margin: 0;">
-            If you need to reissue your license for a domain change or server migration, please contact our support team at <a href="https://hostnibo.com/contact" target="_blank" style="color: #2563eb; text-decoration: underline; font-weight: 600;">Host Nibo Support</a> or visit <a href="https://hostnibo.com" target="_blank" style="color: #2563eb; text-decoration: underline; font-weight: 600;">hostnibo.com</a>.
+            If you need to reissue your license for a domain change or server migration, please contact our support team at <a href="https://siyam.bio.link/" target="_blank" style="color: #2563eb; text-decoration: underline; font-weight: 600;">Support Portal</a> or visit <a href="https://hostnibo.com" target="_blank" style="color: #2563eb; text-decoration: underline; font-weight: 600;">hostnibo.com</a>.
         </p>
     </div>
 </div>

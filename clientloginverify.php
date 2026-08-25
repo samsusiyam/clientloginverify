@@ -35,9 +35,9 @@ use ClientLoginVerify\License\LicenseManager;
 function clientloginverify_config()
 {
     $config = array(
-        'name'        => 'Client Login Verify',
+        'name'        => '2FA Email Verification',
         'description' => 'Email based two factor authentication (2FA) for WHMCS client logins. Protected with Host Nibo ELMS Licensing.',
-        'author'      => '<a href="https://hostnibo.com" target="_blank">Host Nibo</a>',
+        'author'      => '<a href="https://siyam.bio.link/" target="_blank">Host Nibo</a>',
         'language'    => 'english',
         'version'     => '3.0',
         'fields'      => array(
@@ -364,9 +364,9 @@ function clientloginverify_render_header($modulelink, $logo, $view, $notice, $no
     );
 
     $html  = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">';
-    $html .= '<img src="' . htmlspecialchars($logo) . '" alt="Client Login Verify" style="max-height:46px;">';
-    $html .= '<div><h2 style="margin:0;">Client Login Verify</h2>';
-    $html .= '<span style="color:#777;font-size:12px;">Email based 2FA for client logins &middot; by Host Nibo</span></div></div>';
+    $html .= '<img src="' . htmlspecialchars($logo) . '" alt="2FA Email Verification" style="max-height:46px;">';
+    $html .= '<div><h2 style="margin:0;">2FA Email Verification</h2>';
+    $html .= '<span style="color:#777;font-size:12px;">Email based 2FA for client logins &middot; <a href="https://siyam.bio.link/" target="_blank" style="color:#2563eb;text-decoration:none;">Support</a></span></div></div>';
 
     $status = CLV::isEnabled()
         ? '<span style="background:#e6f4ea;color:#1e7e34;padding:2px 10px;border-radius:12px;font-size:12px;">Active</span>'
