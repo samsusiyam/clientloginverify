@@ -901,14 +901,13 @@ class CLV
                 return true;
             }
             $err = isset($response['message']) ? $response['message'] : 'unknown error';
-            self::log($clientId, 'email_failed', 'Template send: ' . $err);
+            self::debug($clientId, 'Template send attempt notice: ' . $err);
         } catch (\Throwable $e) {
-            // Catch Error too (e.g. missing WHMCS\Mail\Entity\Client class).
-            self::debug($clientId, 'template send threw: ' . $e->getMessage());
-            self::log($clientId, 'email_failed', 'Template send exception: ' . $e->getMessage());
+            // Catch Error (e.g. WHMCS entity resolution issue). Fall through to Path 2.
+            self::debug($clientId, 'Template send attempt threw: ' . $e->getMessage());
         }
 
-        // ---- Path 2: native inline general message -------------------------
+        // ---- Path 2: native inline general message fallback ----------------
         try {
             $response = localAPI('SendEmail', array(
                 'customtype'    => 'general',
@@ -922,10 +921,10 @@ class CLV
                 return true;
             }
             $err = isset($response['message']) ? $response['message'] : 'unknown error';
-            self::log($clientId, 'email_failed', 'Inline send: ' . $err);
+            self::log($clientId, 'email_failed', 'Email send error: ' . $err);
         } catch (\Throwable $e) {
             self::debug($clientId, 'inline send threw: ' . $e->getMessage());
-            self::log($clientId, 'email_failed', 'Inline send exception: ' . $e->getMessage());
+            self::log($clientId, 'email_failed', 'Email send exception: ' . $e->getMessage());
         }
 
         return false;

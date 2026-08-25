@@ -822,18 +822,6 @@ function clientloginverify_clientarea($vars)
             CLV::redirect($returnUrl ? $returnUrl : CLV::systemUrl('clientarea.php'));
         }
 
-        // Ensure there is always a live code so the form can render.
-        if (!CLV::hasPendingCode($clientId)) {
-            $code = CLV::issueCode($clientId);
-            if (CLV::sendCode($clientId, $code)) {
-                CLV::log($clientId, 'otp_sent', 'Verification code emailed (auto-issued on verify page)');
-                $base['vars']['info'] = isset($lang['code_resent']) ? $lang['code_resent'] : 'A verification code has been sent to your email.';
-            } else {
-                CLV::log($clientId, 'email_failed', 'Failed to auto-issue verification email');
-                $base['vars']['error'] = isset($lang['email_failed']) ? $lang['email_failed'] : 'We could not send your verification email. Please use "Resend Code" or contact support.';
-            }
-        }
-
         $otpLength = (int) CLV::setting('otpLength');
         $viewMode  = (isset($_GET['mode']) && $_GET['mode'] === 'backup') ? 'backup' : 'otp';
 
@@ -880,6 +868,18 @@ function clientloginverify_clientarea($vars)
                     CLV::redirect($returnUrl ? $returnUrl : CLV::systemUrl('clientarea.php'));
                 }
                 $base['vars']['error'] = $res['message'];
+            }
+        } else {
+            // GET request: Only issue a code if the client has NO code record in the database
+            if (!CLV::pendingCode($clientId)) {
+                $code = CLV::issueCode($clientId);
+                if (CLV::sendCode($clientId, $code)) {
+                    CLV::log($clientId, 'otp_sent', 'Verification code emailed (auto-issued on verify page)');
+                    $base['vars']['info'] = isset($lang['code_resent']) ? $lang['code_resent'] : 'A verification code has been sent to your email.';
+                } else {
+                    CLV::log($clientId, 'email_failed', 'Failed to auto-issue verification email');
+                    $base['vars']['error'] = isset($lang['email_failed']) ? $lang['email_failed'] : 'We could not send your verification email. Please use "Resend Code" or contact support.';
+                }
             }
         }
 
