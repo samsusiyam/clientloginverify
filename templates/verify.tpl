@@ -58,10 +58,10 @@
                         {/if}
                     </p>
 
-                    <form method="post" action="{$generate_codes_url}">
+                    <form method="post" action="{$generate_codes_url}" id="clv_gen_codes_form">
                         <input type="hidden" name="token" value="{$token}">
                         <input type="hidden" name="clv_generate_backup_codes" value="1">
-                        <button type="submit" class="clv-btn-sm clv-btn-primary" onclick="return confirm('{$lang.generate_codes_warn|default:'Generating new backup codes will invalidate any existing ones.'}');">
+                        <button type="button" class="clv-btn-sm clv-btn-primary" onclick="clvConfirmGenerateCodes();">
                             🔑 {$lang.generate_codes|default:'Generate New Backup Codes'}
                         </button>
                     </form>
@@ -92,16 +92,16 @@
                                         <span>Expires: {$dev->expires_at|truncate:10:""}</span>
                                     </div>
                                 </div>
-                                <form method="post" action="{$devices_url}&action=revokedevice&device_id={$dev->id}">
+                                <form method="post" action="{$devices_url}&action=revokedevice&device_id={$dev->id}" id="clv_revoke_form_{$dev->id}">
                                     <input type="hidden" name="token" value="{$token}">
-                                    <button type="submit" class="clv-btn-sm clv-btn-danger" onclick="return confirm('Revoke this device?');">{$lang.revoke|default:'Revoke'}</button>
+                                    <button type="button" class="clv-btn-sm clv-btn-danger" onclick="clvConfirmRevokeDevice('clv_revoke_form_{$dev->id}');">{$lang.revoke|default:'Revoke'}</button>
                                 </form>
                             </div>
                         {/foreach}
                     </div>
-                    <form method="post" action="{$devices_url}&action=revokealldevices" style="margin-top:10px;">
+                    <form method="post" action="{$devices_url}&action=revokealldevices" id="clv_revoke_all_form" style="margin-top:10px;">
                         <input type="hidden" name="token" value="{$token}">
-                        <button type="submit" class="clv-btn-sm clv-btn-secondary" onclick="return confirm('Revoke all trusted devices?');">{$lang.revoke_all|default:'Revoke All Devices'}</button>
+                        <button type="button" class="clv-btn-sm clv-btn-secondary" onclick="clvConfirmRevokeAllDevices();">{$lang.revoke_all|default:'Revoke All Devices'}</button>
                     </form>
                 {else}
                     <p style="color:var(--clv-text-muted);font-size:13px;margin:8px 0;text-align:left;">{$lang.no_trusted_devices|default:'You currently have no trusted devices.'}</p>
@@ -246,6 +246,25 @@
     </div>
 </div>
 
+<!-- Custom Animated Confirm Modal -->
+<div class="clv-modal-overlay" id="clv_modal" style="display:none;">
+    <div class="clv-modal-card">
+        <div class="clv-modal-icon" id="clv_modal_icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                <line x1="12" y1="9" x2="12" y2="13"></line>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+        </div>
+        <h3 class="clv-modal-title" id="clv_modal_title">Confirm Action</h3>
+        <p class="clv-modal-desc" id="clv_modal_desc">Are you sure you want to proceed?</p>
+        <div class="clv-modal-actions">
+            <button type="button" class="clv-modal-btn clv-modal-btn-cancel" onclick="clvCloseModal();">Cancel</button>
+            <button type="button" class="clv-modal-btn clv-modal-btn-confirm" id="clv_modal_confirm_btn">Confirm</button>
+        </div>
+    </div>
+</div>
+
 <style>{literal}
 /* ======================================================================
  * 1. Default Light Mode Theme Variables
@@ -380,16 +399,110 @@ body.theme-default.theme-dark,
 /* Devices & Backup Codes List */
 .clv-security-section{text-align:left;background:var(--clv-section-bg);border:1px solid var(--clv-card-border);border-radius:10px;padding:16px;margin-top:16px;}
 .clv-section-title{margin:0 0 8px;font-size:15px;font-weight:700;color:var(--clv-text-primary);display:flex;align-items:center;gap:8px;}
-.clv-backup-codes-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0;}
-.clv-backup-code-pill{background:var(--clv-pill-bg);border:1px solid var(--clv-card-border);border-radius:6px;padding:8px 12px;text-align:center;}
-.clv-backup-code-pill code{font-size:15px;font-weight:700;letter-spacing:2px;color:var(--clv-text-primary);}
+.clv-backup-codes-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0;}
+.clv-backup-code-pill{background:var(--clv-card-bg) !important;border:1.5px solid var(--clv-card-border) !important;border-radius:8px !important;padding:10px 12px !important;text-align:center !important;box-shadow:0 1px 3px rgba(0,0,0,0.05) !important;}
+.clv-backup-code-pill code{background:transparent !important;background-color:transparent !important;font-size:16px !important;font-weight:800 !important;letter-spacing:2.5px !important;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace !important;color:var(--clv-text-primary) !important;border:none !important;padding:0 !important;box-shadow:none !important;}
 .clv-devices-list{margin:12px 0 0;text-align:left;}
-.clv-device-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--clv-pill-bg);border:1px solid var(--clv-card-border);border-radius:8px;margin-bottom:8px;}
+.clv-device-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--clv-card-bg);border:1px solid var(--clv-card-border);border-radius:8px;margin-bottom:8px;}
 .clv-device-name{font-size:13px;color:var(--clv-text-primary);display:flex;align-items:center;gap:6px;}
 .clv-device-meta{font-size:11.5px;color:var(--clv-text-muted);margin-top:2px;}
+
+/* Custom Confirmation Modal */
+.clv-modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.7);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;pointer-events:none;transition:opacity .2s ease-in-out;}
+.clv-modal-overlay.clv-modal-active{opacity:1;pointer-events:auto;}
+.clv-modal-card{background:var(--clv-card-bg);border:1px solid var(--clv-card-border);border-radius:16px;box-shadow:var(--clv-card-shadow);max-width:400px;width:100%;padding:26px 22px;text-align:center;transform:scale(0.92);transition:transform .2s ease-out,background .2s,border-color .2s;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.clv-modal-overlay.clv-modal-active .clv-modal-card{transform:scale(1);}
+.clv-modal-icon{width:56px;height:56px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;background:rgba(239,68,68,0.12);color:#ef4444;}
+.clv-modal-icon.icon-warning{background:rgba(245,158,11,0.12);color:#f59e0b;}
+.clv-modal-icon.icon-primary{background:rgba(47,109,246,0.12);color:var(--clv-btn-primary);}
+.clv-modal-title{font-size:18px;font-weight:700;color:var(--clv-text-primary);margin:0 0 8px;}
+.clv-modal-desc{font-size:13.5px;color:var(--clv-text-secondary);line-height:1.5;margin:0 0 20px;}
+.clv-modal-actions{display:flex;gap:10px;justify-content:center;}
+.clv-modal-btn{flex:1;padding:10px 16px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;transition:background .15s,transform .1s;}
+.clv-modal-btn:active{transform:scale(0.98);}
+.clv-modal-btn-cancel{background:var(--clv-btn-secondary);color:var(--clv-btn-secondary-text);}
+.clv-modal-btn-cancel:hover{background:var(--clv-divider);}
+.clv-modal-btn-confirm{background:var(--clv-btn-primary);color:#fff;}
+.clv-modal-btn-confirm.btn-danger{background:#dc2626;color:#fff;}
+.clv-modal-btn-confirm.btn-danger:hover{background:#b91c1c;}
 {/literal}</style>
 
 <script>{literal}
+var clvPendingAction = null;
+
+function clvShowConfirm(options) {
+    var modal = document.getElementById('clv_modal');
+    if (!modal) return;
+    document.getElementById('clv_modal_title').textContent = options.title || 'Confirm Action';
+    document.getElementById('clv_modal_desc').textContent = options.desc || 'Are you sure?';
+    
+    var iconEl = document.getElementById('clv_modal_icon');
+    if (iconEl) {
+        iconEl.className = 'clv-modal-icon ' + (options.iconType || 'icon-warning');
+    }
+    
+    var confirmBtn = document.getElementById('clv_modal_confirm_btn');
+    if (confirmBtn) {
+        confirmBtn.textContent = options.confirmText || 'Confirm';
+        confirmBtn.className = 'clv-modal-btn clv-modal-btn-confirm ' + (options.danger ? 'btn-danger' : '');
+    }
+    
+    clvPendingAction = options.onConfirm || null;
+    
+    modal.style.display = 'flex';
+    setTimeout(function(){ modal.classList.add('clv-modal-active'); }, 10);
+}
+
+function clvCloseModal() {
+    var modal = document.getElementById('clv_modal');
+    if (!modal) return;
+    modal.classList.remove('clv-modal-active');
+    setTimeout(function(){ modal.style.display = 'none'; }, 200);
+    clvPendingAction = null;
+}
+
+function clvConfirmGenerateCodes() {
+    clvShowConfirm({
+        title: '{/literal}{$lang.generate_codes|default:"Generate New Backup Codes"}{literal}',
+        desc: '{/literal}{$lang.generate_codes_warn|default:"Generating new backup codes will invalidate any existing ones."}{literal}',
+        iconType: 'icon-primary',
+        confirmText: '{/literal}{$lang.generate_codes|default:"Generate Codes"}{literal}',
+        danger: false,
+        onConfirm: function() {
+            var form = document.getElementById('clv_gen_codes_form');
+            if (form) form.submit();
+        }
+    });
+}
+
+function clvConfirmRevokeDevice(formId) {
+    clvShowConfirm({
+        title: '{/literal}{$lang.revoke|default:"Revoke Device"}{literal}',
+        desc: 'Are you sure you want to revoke this trusted device? You will need to verify with two-factor authentication next time you log in from it.',
+        iconType: 'icon-warning',
+        confirmText: '{/literal}{$lang.revoke|default:"Revoke"}{literal}',
+        danger: true,
+        onConfirm: function() {
+            var form = document.getElementById(formId);
+            if (form) form.submit();
+        }
+    });
+}
+
+function clvConfirmRevokeAllDevices() {
+    clvShowConfirm({
+        title: '{/literal}{$lang.revoke_all|default:"Revoke All Devices"}{literal}',
+        desc: 'Are you sure you want to revoke all trusted devices? All saved sessions will require two-factor verification on their next login.',
+        iconType: 'icon-warning',
+        confirmText: '{/literal}{$lang.revoke_all|default:"Revoke All"}{literal}',
+        danger: true,
+        onConfirm: function() {
+            var form = document.getElementById('clv_revoke_all_form');
+            if (form) form.submit();
+        }
+    });
+}
+
 function clvGetBackupCodesText() {
     var box = document.getElementById('clv_backup_codes_box');
     if (!box) return '';
