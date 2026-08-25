@@ -1,4 +1,4 @@
-<div class="clv-verify-container">
+<div class="clv-verify-container" id="clv_container">
     <div class="clv-card">
         {if $view_mode == 'security' || $view_mode == 'devices'}
             <div class="clv-icon-wrapper clv-icon-shield">
@@ -122,8 +122,8 @@
             <p class="clv-text">{$lang.normal_active}</p>
             <div style="display:flex;flex-direction:column;gap:10px;">
                 <a href="{$logout_url|default:'clientarea.php'}" class="clv-btn">{$lang.continue}</a>
-                {if $devices_url}
-                    <a href="{$devices_url}" class="clv-btn clv-btn-secondary">{$lang.trusted_devices_title|default:'Manage Trusted Devices'}</a>
+                {if $security_url}
+                    <a href="{$security_url}" class="clv-btn clv-btn-secondary">{$lang.security_center|default:'2FA Security Center'}</a>
                 {/if}
             </div>
         {else}
@@ -261,8 +261,11 @@
 </div>
 
 <style>{literal}
-/* Responsive & Adaptive Theme System (Lagom + WHMCS + OS Dark Mode) */
-:root {
+/* ======================================================================
+ * 1. Default Light Mode Theme Variables
+ * ==================================================================== */
+:root,
+.clv-verify-container {
     --clv-card-bg: #ffffff;
     --clv-card-border: #e2e8f0;
     --clv-card-shadow: 0 10px 30px rgba(18, 38, 63, 0.08);
@@ -276,7 +279,7 @@
     --clv-input-focus-shadow: rgba(47, 109, 246, 0.15);
     --clv-btn-primary: #2f6df6;
     --clv-btn-hover: #2055cb;
-    --clv-btn-secondary: #e2e8f0;
+    --clv-btn-secondary: #f1f5f9;
     --clv-btn-secondary-text: #334155;
     --clv-alert-err-bg: #fdecea;
     --clv-alert-err-border: #f5c6cb;
@@ -285,18 +288,38 @@
     --clv-alert-info-border: #b8e0ff;
     --clv-alert-info-text: #0b62a8;
     --clv-divider: #edf2f7;
+    --clv-section-bg: #f8fafc;
+    --clv-pill-bg: #ffffff;
 }
 
-/* Explicit Dark Mode Overrides for Lagom & WHMCS */
-[data-theme="dark"],
-.theme-dark,
-.dark-mode,
-.mode-dark,
-.dark,
-body.dark-mode,
+/* ======================================================================
+ * 2. Explicit WHMCS / Lagom Dark Mode Theme Overrides
+ * ==================================================================== */
+html[data-theme="dark"],
+html[data-bs-theme="dark"],
+html[data-style="dark"],
+html.theme-dark,
+html.dark,
+html.dark-mode,
+html.site-theme-dark,
+html.lagom-theme-dark,
+html.mode-dark,
+body[data-theme="dark"],
+body[data-bs-theme="dark"],
+body[data-style="dark"],
 body.theme-dark,
+body.dark,
+body.dark-mode,
+body.site-theme-dark,
 body.lagom-theme-dark,
-body.lagom-layout-dark {
+body.mode-dark,
+body.theme-default.theme-dark,
+.clv-verify-container.clv-dark-theme,
+.theme-dark .clv-verify-container,
+[data-theme="dark"] .clv-verify-container,
+[data-bs-theme="dark"] .clv-verify-container,
+.dark-mode .clv-verify-container,
+.dark .clv-verify-container {
     --clv-card-bg: #1c2230 !important;
     --clv-card-border: #2e384d !important;
     --clv-card-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
@@ -317,33 +340,13 @@ body.lagom-layout-dark {
     --clv-alert-info-border: rgba(11, 98, 168, 0.4) !important;
     --clv-alert-info-text: #93c5fd !important;
     --clv-divider: #2e384d !important;
+    --clv-section-bg: #131722 !important;
+    --clv-pill-bg: #1c2230 !important;
 }
 
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]):not(.theme-light) {
-        --clv-card-bg: #1c2230;
-        --clv-card-border: #2e384d;
-        --clv-card-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-        --clv-text-primary: #f8fafc;
-        --clv-text-secondary: #94a3b8;
-        --clv-text-muted: #64748b;
-        --clv-input-bg: #131722;
-        --clv-input-border: #334155;
-        --clv-input-text: #ffffff;
-        --clv-input-focus: #3b82f6;
-        --clv-input-focus-shadow: rgba(59, 130, 246, 0.25);
-        --clv-btn-secondary: #2e384d;
-        --clv-btn-secondary-text: #e2e8f0;
-        --clv-alert-err-bg: rgba(183, 28, 28, 0.2);
-        --clv-alert-err-border: rgba(183, 28, 28, 0.4);
-        --clv-alert-err-text: #fca5a5;
-        --clv-alert-info-bg: rgba(11, 98, 168, 0.2);
-        --clv-alert-info-border: rgba(11, 98, 168, 0.4);
-        --clv-alert-info-text: #93c5fd;
-        --clv-divider: #2e384d;
-    }
-}
-
+/* ======================================================================
+ * 3. Component Styles (Strictly using CSS variables)
+ * ==================================================================== */
 .clv-verify-container{display:flex;justify-content:center;align-items:flex-start;padding:40px 15px;min-height:50vh;}
 .clv-card{background:var(--clv-card-bg);border:1px solid var(--clv-card-border);border-radius:16px;box-shadow:var(--clv-card-shadow);max-width:460px;width:100%;padding:38px 34px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;transition:background .2s,border-color .2s,box-shadow .2s;}
 .clv-icon-wrapper{display:inline-flex;align-items:center;justify-content:center;width:72px;height:72px;border-radius:50%;margin-bottom:18px;}
@@ -372,7 +375,9 @@ body.lagom-layout-dark {
 .clv-btn:disabled{opacity:0.6;cursor:not-allowed;}
 .clv-btn-secondary{background:var(--clv-btn-secondary);color:var(--clv-btn-secondary-text);}
 .clv-btn-secondary:hover{background:var(--clv-divider);color:var(--clv-btn-secondary-text);}
-.clv-btn-sm{padding:5px 10px;font-size:12px;border-radius:6px;border:none;cursor:pointer;}
+.clv-btn-sm{padding:6px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;text-decoration:none;}
+.clv-btn-primary{background:var(--clv-btn-primary);color:#fff;}
+.clv-btn-primary:hover{background:var(--clv-btn-hover);color:#fff;}
 .clv-btn-danger{background:#dc2626;color:#fff;}
 .clv-btn-danger:hover{background:#b91c1c;}
 .clv-resend-form{margin:14px 0 0;}
@@ -387,13 +392,13 @@ body.lagom-layout-dark {
 .clv-logout a:hover{color:var(--clv-text-primary);text-decoration:underline;}
 
 /* Devices & Backup Codes List */
-.clv-security-section{text-align:left;background:var(--clv-input-bg);border:1px solid var(--clv-card-border);border-radius:10px;padding:16px;margin-top:16px;}
+.clv-security-section{text-align:left;background:var(--clv-section-bg);border:1px solid var(--clv-card-border);border-radius:10px;padding:16px;margin-top:16px;}
 .clv-section-title{margin:0 0 8px;font-size:15px;font-weight:700;color:var(--clv-text-primary);display:flex;align-items:center;gap:8px;}
 .clv-backup-codes-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0;}
-.clv-backup-code-pill{background:var(--clv-card-bg);border:1px solid var(--clv-card-border);border-radius:6px;padding:8px 12px;text-align:center;}
+.clv-backup-code-pill{background:var(--clv-pill-bg);border:1px solid var(--clv-card-border);border-radius:6px;padding:8px 12px;text-align:center;}
 .clv-backup-code-pill code{font-size:15px;font-weight:700;letter-spacing:2px;color:var(--clv-text-primary);}
 .clv-devices-list{margin:12px 0 0;text-align:left;}
-.clv-device-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--clv-card-bg);border:1px solid var(--clv-card-border);border-radius:8px;margin-bottom:8px;}
+.clv-device-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--clv-pill-bg);border:1px solid var(--clv-card-border);border-radius:8px;margin-bottom:8px;}
 .clv-device-name{font-size:13px;color:var(--clv-text-primary);display:flex;align-items:center;gap:6px;}
 .clv-device-meta{font-size:11.5px;color:var(--clv-text-muted);margin-top:2px;}
 {/literal}</style>
@@ -448,6 +453,79 @@ function clvPrintBackupCodes() {
     win.print();
     win.close();
 }
+
+/* Dynamic WHMCS & Lagom Dark/Light Mode Live Detection & Sync */
+function clvSyncTheme() {
+    var container = document.getElementById('clv_container');
+    if (!container) return;
+
+    var isDark = false;
+    var html = document.documentElement;
+    var body = document.body;
+
+    var htmlTheme = (html.getAttribute('data-theme') || html.getAttribute('data-bs-theme') || html.getAttribute('data-style') || '').toLowerCase();
+    var bodyTheme = (body ? (body.getAttribute('data-theme') || body.getAttribute('data-bs-theme') || body.getAttribute('data-style') || '') : '').toLowerCase();
+
+    if (htmlTheme === 'dark' || bodyTheme === 'dark') {
+        isDark = true;
+    } else if (htmlTheme === 'light' || bodyTheme === 'light') {
+        isDark = false;
+    } else {
+        var darkClasses = ['theme-dark', 'dark', 'dark-mode', 'mode-dark', 'site-theme-dark', 'lagom-theme-dark'];
+        for (var i = 0; i < darkClasses.length; i++) {
+            if (html.classList.contains(darkClasses[i]) || (body && body.classList.contains(darkClasses[i]))) {
+                isDark = true;
+                break;
+            }
+        }
+    }
+
+    if (!isDark && htmlTheme !== 'light' && bodyTheme !== 'light') {
+        try {
+            var lsStyle = (localStorage.getItem('lagom-theme-style') || localStorage.getItem('theme') || localStorage.getItem('theme-mode') || localStorage.getItem('site-theme') || '').toLowerCase();
+            if (lsStyle === 'dark') {
+                isDark = true;
+            }
+        } catch(e) {}
+    }
+
+    if (!isDark && body && htmlTheme !== 'light' && bodyTheme !== 'light') {
+        try {
+            var bg = window.getComputedStyle(body).backgroundColor;
+            var rgb = bg.match(/\d+/g);
+            if (rgb && rgb.length >= 3) {
+                var r = parseInt(rgb[0], 10), g = parseInt(rgb[1], 10), b = parseInt(rgb[2], 10), a = rgb[3] !== undefined ? parseFloat(rgb[3]) : 1;
+                if (a > 0.5 && (r < 75 && g < 75 && b < 75)) {
+                    isDark = true;
+                }
+            }
+        } catch(e) {}
+    }
+
+    if (isDark) {
+        container.classList.add('clv-dark-theme');
+    } else {
+        container.classList.remove('clv-dark-theme');
+    }
+}
+
+clvSyncTheme();
+
+if (window.MutationObserver) {
+    var observer = new MutationObserver(function() {
+        clvSyncTheme();
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'data-bs-theme', 'data-style'] });
+    if (document.body) {
+        observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'data-bs-theme', 'data-style', 'style'] });
+    }
+}
+
+document.addEventListener('click', function(e) {
+    setTimeout(clvSyncTheme, 50);
+    setTimeout(clvSyncTheme, 250);
+});
+window.addEventListener('storage', clvSyncTheme);
 
 (function(){
     var container = document.getElementById('clv_pin_container');
