@@ -39,7 +39,7 @@
                     </div>
 
                     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
-                        <button type="button" class="clv-btn-sm clv-btn-primary" onclick="clvCopyBackupCodes();">
+                        <button type="button" class="clv-btn-sm clv-btn-primary" onclick="clvCopyBackupCodes(this);">
                             📋 {$lang.copy_codes|default:'Copy All'}
                         </button>
                         <button type="button" class="clv-btn-sm clv-btn-secondary" onclick="clvDownloadBackupCodes();">
@@ -265,6 +265,14 @@
     </div>
 </div>
 
+<!-- Custom Toast Notification -->
+<div class="clv-toast" id="clv_toast" style="display:none;">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"></polyline>
+    </svg>
+    <span id="clv_toast_text">Copied to clipboard!</span>
+</div>
+
 <style>{literal}
 /* ======================================================================
  * 1. Default Light Mode Theme Variables
@@ -425,10 +433,30 @@ body.theme-default.theme-dark,
 .clv-modal-btn-confirm{background:var(--clv-btn-primary);color:#fff;}
 .clv-modal-btn-confirm.btn-danger{background:#dc2626;color:#fff;}
 .clv-modal-btn-confirm.btn-danger:hover{background:#b91c1c;}
+
+/* Toast Notification */
+.clv-toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--clv-card-bg);color:var(--clv-text-primary);border:1.5px solid var(--clv-card-border);padding:10px 20px;border-radius:50px;font-size:13.5px;font-weight:600;box-shadow:var(--clv-card-shadow);z-index:9999999;display:flex;align-items:center;gap:8px;opacity:0;pointer-events:none;transition:transform .25s cubic-bezier(0.16,1,0.3,1),opacity .25s ease;}
+.clv-toast svg{color:#22c55e;}
+.clv-toast.clv-toast-active{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0);}
 {/literal}</style>
 
 <script>{literal}
 var clvPendingAction = null;
+var clvToastTimer = null;
+
+function clvShowToast(text) {
+    var toast = document.getElementById('clv_toast');
+    if (!toast) return;
+    var span = document.getElementById('clv_toast_text');
+    if (span) span.textContent = text;
+    toast.style.display = 'flex';
+    setTimeout(function() { toast.classList.add('clv-toast-active'); }, 10);
+    if (clvToastTimer) clearTimeout(clvToastTimer);
+    clvToastTimer = setTimeout(function() {
+        toast.classList.remove('clv-toast-active');
+        setTimeout(function() { toast.style.display = 'none'; }, 300);
+    }, 3000);
+}
 
 function clvShowConfirm(options) {
     var modal = document.getElementById('clv_modal');
@@ -528,22 +556,41 @@ function clvGetBackupCodesText() {
     return "=== YOUR 2FA EMERGENCY BACKUP CODES ===\n\n" + codes.join("\n") + "\n\n* Each code can only be used once.\n* Keep these codes secure.";
 }
 
-function clvCopyBackupCodes() {
+function clvCopyBackupCodes(btn) {
     var txt = clvGetBackupCodesText();
     if (!txt) return;
+
+    function onCopied() {
+        if (btn) {
+            var orig = btn.innerHTML;
+            btn.innerHTML = '✅ Copied!';
+            setTimeout(function() { btn.innerHTML = orig; }, 2000);
+        }
+        clvShowToast('{/literal}{$lang.codes_copied|default:"Backup codes copied to clipboard!"}{literal}');
+    }
+
     if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(txt).then(function() {
-            alert('{/literal}{$lang.codes_copied|default:"Backup codes copied to clipboard!"}{literal}');
+        navigator.clipboard.writeText(txt).then(onCopied).catch(function() {
+            clvFallbackCopy(txt, onCopied);
         });
     } else {
-        var ta = document.createElement('textarea');
-        ta.value = txt;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        alert('{/literal}{$lang.codes_copied|default:"Backup codes copied to clipboard!"}{literal}');
+        clvFallbackCopy(txt, onCopied);
     }
+}
+
+function clvFallbackCopy(txt, cb) {
+    var ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+        document.execCommand('copy');
+        if (cb) cb();
+    } catch (e) {}
+    document.body.removeChild(ta);
 }
 
 function clvDownloadBackupCodes() {
@@ -561,12 +608,47 @@ function clvDownloadBackupCodes() {
 function clvPrintBackupCodes() {
     var txt = clvGetBackupCodesText();
     if (!txt) return;
-    var win = window.open('', 'PRINT', 'height=400,width=600');
-    win.document.write('<html><head><title>2FA Backup Codes</title></head><body><pre style="font-size:16px;line-height:1.6;">' + txt + '</pre></body></html>');
-    win.document.close();
-    win.focus();
-    win.print();
-    win.close();
+
+    var iframe = document.getElementById('clv_print_iframe');
+    if (!iframe) {
+        iframe = document.createElement('iframe');
+        iframe.id = 'clv_print_iframe';
+        iframe.style.position = 'fixed';
+        iframe.style.right = '0';
+        iframe.style.bottom = '0';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = '0';
+        document.body.appendChild(iframe);
+    }
+
+    var doc = iframe.contentWindow || iframe.contentDocument;
+    if (doc.document) doc = doc.document;
+
+    var safeTxt = txt.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    var printHtml = '<!DOCTYPE html><html><head><title>2FA Backup Codes</title>' +
+        '<style>' +
+        'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; padding: 40px; color: #111; background: #fff; }' +
+        'h2 { margin-bottom: 6px; font-size: 20px; border-bottom: 2px solid #333; padding-bottom: 8px; }' +
+        'p { font-size: 13px; color: #555; margin-bottom: 18px; }' +
+        'pre { background: #f4f6f8; padding: 18px; border-radius: 8px; border: 1px solid #ddd; font-size: 15px; line-height: 1.8; font-family: monospace; }' +
+        '</style>' +
+        '</head><body>' +
+        '<h2>Two-Factor Authentication Recovery Backup Codes</h2>' +
+        '<p>Keep these recovery codes in a safe place. Each code can only be used once.</p>' +
+        '<pre>' + safeTxt + '</pre>' +
+        '</body></html>';
+
+    doc.open();
+    doc.write(printHtml);
+    doc.close();
+
+    setTimeout(function() {
+        if (iframe.contentWindow) {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+        }
+    }, 300);
 }
 
 /* Dynamic WHMCS & Lagom Dark/Light Mode Live Detection & Sync */
